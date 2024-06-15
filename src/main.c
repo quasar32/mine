@@ -9,9 +9,14 @@
 #include <unistd.h>
 #include <linux/limits.h>
 #include <stb_image.h>
+#include <math.h>
 
 #define COUNT_OF(ary) (sizeof(ary) / sizeof(*(ary)))
 #define END_OF(ary) ((ary) + COUNT_OF((ary)))
+
+#define MAX_PITCH (GLM_PI_2f - 0.01F)
+#define MIN_PITCH (-MAX_PITCH)
+#define SENSITIVITY 0.1F;
 
 struct vertex {
 	vec3 pos;
@@ -20,49 +25,78 @@ struct vertex {
 };
 
 static GLushort indices[] = {
+	/* back */
 	0, 1, 2,
 	2, 3, 0,
+
+	/* front */
 	4, 5, 6,
 	6, 7, 4,
+
+	/* left */
 	8, 9, 10,
 	10, 11, 8,
+
+	/* right */
 	12, 13, 14,
 	14, 15, 12,
+	
+	/* bottom */
 	16, 17, 18,
 	18, 19, 16,
+
+	/* top */
 	20, 21, 22,
 	22, 23, 20
 };
 
 static struct vertex vertices[] = {
-	{{-0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}},
-	{{0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}},
-	{{0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}},
-	{{0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}},
-	{{0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}},
-	{{-0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}},
-	{{-0.5F, 0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}},
-	{{-0.5F, -0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}},
-	{{0.5F, 0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}},
-	{{0.5F, 0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}},
-	{{0.5F, -0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}},
-	{{0.5F, -0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}},
-	{{-0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}},
-	{{0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}},
-	{{0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}},
-	{{0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}},
-	{{0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}},
-	{{-0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}}
+	/* back */
+	{{0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {0.0F, 0.0F}},
+	{{0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {0.0F, 1.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {1.0F, 1.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {1.0F, 0.0F}},
+
+	/* front */
+	{{0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {1.0F, 1.0F}},
+
+	/* left */
+	{{-0.5F, 0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}, {0.0F, 1.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 1.0F}},
+
+	/* right */
+	{{0.5F, 0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F}},
+	{{0.5F, -0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}, {1.0F, 0.0F}},
+
+	/* bottom */
+	{{0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}, {1.0F, 0.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}, {1.0F, 1.0F}},
+
+	/* top */
+	{{0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F}},
+	{{-0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}, {0.0F, 1.0F}},
 };
 
 static int width = 640;
 static int height = 480;
+
+static vec3 eye = {0.0F, 0.0F, 100.0F};
+static vec3 front = {0.0F, 0.0F, -1.0F};
+static vec3 up = {0.0F, 1.0F, 0.0F};
+static vec3 right;
+
+static float dt;
 
 [[noreturn]]
 static void die(const char *fmt, ...) {
@@ -156,6 +190,7 @@ static void glfw_die(const char *fun) {
 	die("%s (%d): %s\n", fun, err, msg);
 }
 
+[[maybe_unused]]
 static void normal_model(mat4 src, mat3 dst) {
 	mat4 tmp;
 	glm_mat4_inv(src, tmp);
@@ -184,23 +219,57 @@ static char *stpecpy(char *dst, char *end, const char *src) {
 
 static void set_data_path(void) {
 	char path[PATH_MAX];
-	char *slash, *end, *nul;
+	char *nul, *end;
 
 	if (!realpath("/proc/self/exe", path)) {
 		die("realpath(): %s\n", strerror(errno));
 	}
-	slash = strrchr(path, '/');
-	if (!slash) {
+	nul = strrchr(path, '/');
+	if (!nul) {
 		die("path missing slash\n");
 	}
 	end = END_OF(path);
-	nul = stpecpy(slash + 1, end, "res");
+	nul = stpecpy(nul + 1, end, "res");
 	if (nul == end) {
 		die("path too long\n");
 	}
 	if (chdir(path) < 0) {
 		die("chdir(): %s\n", strerror(errno));
 	}
+}
+
+static double clamp(double v, double l, double h) {
+	return fmin(fmax(v, l), h);
+}
+
+static void mouse_cb(GLFWwindow *wnd, double x, double y) {
+	static int first;
+	static double last_x;
+	static double last_y;
+	static float yaw = -GLM_PI_2f; 
+	static float pitch;
+	float off_x;
+	float off_y;
+
+	if (!first) {
+		last_x = x;
+		last_y = y;
+		first = 1;
+	}
+	off_x = x - last_x;
+	off_y = last_y - y;
+	last_x = x;
+	last_y = y;
+	off_x *= dt * SENSITIVITY;
+	off_y *= dt * SENSITIVITY;
+	yaw += off_x;
+	pitch += off_y;
+	yaw = fmod(yaw, GLM_PI * 2);
+	pitch = clamp(pitch, MIN_PITCH, MAX_PITCH);
+	front[0] = cosf(yaw) * cosf(pitch);
+	front[1] = sinf(pitch);
+	front[2] = sinf(yaw) * cosf(pitch);
+	glm_normalize(front);
 }
 
 int main(void) {
@@ -212,13 +281,14 @@ int main(void) {
 	GLint view_loc;
 	GLint model_loc;
 	GLint tex_loc;
+	GLint tile_loc;
 	mat4 proj, view, model;
-	mat3 invt;
 	stbi_uc *data;
 	GLuint tex;
 	int w, h, channels;
+	double t0, t1;
+	vec3 center;
 
-	set_data_path();
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
 	}
@@ -234,6 +304,7 @@ int main(void) {
 	if (!gladLoadGL((GLADloadfunc) glfwGetProcAddress)) {
 		glfw_die("glfwGetProcAddress");
 	}
+	set_data_path();
 	data = stbi_load("img/atlas.png", &w, &h, &channels, 3);
 	if (!data) {
 		die("stbi_load: %s\n", stbi_failure_reason());
@@ -243,12 +314,11 @@ int main(void) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, 
-			GL_LINEAR_MIPMAP_LINEAR);
+			GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
-			GL_LINEAR);
+			GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 
 			0, GL_RGB, GL_UNSIGNED_BYTE, data); 
-	glGenerateMipmap(GL_TEXTURE_2D);
 	stbi_image_free(data);
 	data = NULL;
 	glGenVertexArrays(1, &vao);
@@ -267,6 +337,10 @@ int main(void) {
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),
 			indices, GL_STATIC_DRAW);
 	glBindVertexArray(0);
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glDepthFunc(GL_LESS);
 	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
 	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
 	prog = load_prog(vs, fs);
@@ -274,32 +348,59 @@ int main(void) {
 	view_loc = glGetUniformLocation(prog, "view");
 	model_loc = glGetUniformLocation(prog, "model");
 	tex_loc = glGetUniformLocation(prog, "tex");
+	tile_loc = glGetUniformLocation(prog, "tile");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
+	glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+	glfwSetCursorPosCallback(wnd, mouse_cb);
 	glfwSwapInterval(1);
 	glfwShowWindow(wnd);
+	t0 = glfwGetTime();
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
-		glClear(GL_COLOR_BUFFER_BIT);
-		glClear(GL_DEPTH_BUFFER_BIT);
+		t1 = glfwGetTime();
+		dt = t1 - t0;
+		t0 = t1;
+		glm_cross(front, up, right);
+		glm_normalize(right);
+		if (glfwGetKey(wnd, GLFW_KEY_W)) {
+			glm_vec3_muladds(front, 8.0F * dt, eye);
+		}
+		if (glfwGetKey(wnd, GLFW_KEY_S)) {
+			glm_vec3_mulsubs(front, 8.0F * dt, eye);
+		}
+		if (glfwGetKey(wnd, GLFW_KEY_A)) {
+			glm_vec3_mulsubs(right, 8.0F * dt, eye);
+		}
+		if (glfwGetKey(wnd, GLFW_KEY_D)) {
+			glm_vec3_muladds(right, 8.0F * dt, eye);
+		}
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glm_perspective(GLM_PI_4f, width / (float) height, 
 				0.1F, 100.0F, proj); 
 		glm_mat4_identity(view);
-		glm_translate_z(view, -3.0F);
+		glm_vec3_add(eye, front, center);
+		glm_lookat(eye, center, up, view);
 		glm_mat4_identity(model);
-		normal_model(model, invt);
-		static float rot;
-		glm_rotate_x(model, rot, model);
-		rot += 0.01F;
 		glUseProgram(prog);
 		glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *) proj);
 		glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *) view);
-		glUniformMatrix4fv(model_loc, 1, GL_FALSE, (float *) model);
-		glUniform1i(tex_loc, 0);
 		glBindVertexArray(vao);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
-		glDrawElements(GL_TRIANGLES, COUNT_OF(indices), 
-				GL_UNSIGNED_SHORT, NULL); 
+		glUniform1i(tex_loc, 0);
+		for (int i = 0; i < 64; i++) {
+			for (int j = 0; j < 64; j++) {
+				for (int k = 0; k < 64; k++) {
+					glm_mat4_identity(model);
+					glm_translate(model, (vec3) {i, j, k});
+					glUniformMatrix4fv(model_loc, 1, 
+							GL_FALSE, (float *) model);
+					glUniform1i(tile_loc, 4);
+					glDrawElements(GL_TRIANGLES, COUNT_OF(indices), 
+							GL_UNSIGNED_SHORT, NULL); 
+				}
+			}
+		}
 		glfwSwapBuffers(wnd);
 	}
 	return EXIT_SUCCESS;
