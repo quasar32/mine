@@ -190,13 +190,6 @@ static void glfw_die(const char *fun) {
 	die("%s (%d): %s\n", fun, err, msg);
 }
 
-[[maybe_unused]]
-static void normal_model(mat4 src, mat3 dst) {
-	mat4 tmp;
-	glm_mat4_inv(src, tmp);
-	glm_mat4_pick3t(tmp, dst);
-}
-
 static void resize_cb(GLFWwindow *wnd, int w, int h) {
 	glViewport(0, 0, w, h);
 	width = w;
@@ -314,11 +307,12 @@ int main(void) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, 
-			GL_NEAREST);
+			GL_NEAREST_MIPMAP_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
 			GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 
 			0, GL_RGB, GL_UNSIGNED_BYTE, data); 
+	glGenerateMipmap(GL_TEXTURE_2D);
 	stbi_image_free(data);
 	data = NULL;
 	glGenVertexArrays(1, &vao);
@@ -360,6 +354,8 @@ int main(void) {
 		t1 = glfwGetTime();
 		dt = t1 - t0;
 		t0 = t1;
+		printf("\r%f", 1.0F / dt);
+		fflush(stdout);
 		glm_cross(front, up, right);
 		glm_normalize(right);
 		if (glfwGetKey(wnd, GLFW_KEY_W)) {
