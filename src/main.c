@@ -16,7 +16,7 @@
 
 #define MAX_PITCH (GLM_PI_2f - 0.01F)
 #define MIN_PITCH (-MAX_PITCH)
-#define SENSITIVITY 0.1F;
+#define SENSITIVITY 0.1F
 
 struct vertex {
 	vec3 pos;
@@ -24,7 +24,16 @@ struct vertex {
 	vec2 tex;
 };
 
-static GLushort indices[] = {
+struct instance {
+	vec3 off;
+	int tile;
+};
+
+#define CHUNK 64
+
+static struct instance instances[CHUNK][CHUNK][CHUNK];
+
+static uint8_t indices[] = {
 	/* back */
 	0, 1, 2,
 	2, 3, 0,
@@ -91,7 +100,7 @@ static struct vertex vertices[] = {
 static int width = 640;
 static int height = 480;
 
-static vec3 eye = {0.0F, 0.0F, 100.0F};
+static vec3 eye = {0.0F, 0.0F, 10.0F};
 static vec3 front = {0.0F, 0.0F, -1.0F};
 static vec3 up = {0.0F, 1.0F, 0.0F};
 static vec3 right;
@@ -231,8 +240,8 @@ static void set_data_path(void) {
 	}
 }
 
-static double clamp(double v, double l, double h) {
-	return fmin(fmax(v, l), h);
+static float clamp(float v, float l, float h) {
+	return fminf(fmaxf(v, l), h);
 }
 
 static void mouse_cb(GLFWwindow *wnd, double x, double y) {
@@ -257,7 +266,7 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	off_y *= dt * SENSITIVITY;
 	yaw += off_x;
 	pitch += off_y;
-	yaw = fmod(yaw, GLM_PI * 2);
+	yaw = fmodf(yaw, GLM_PIf * 2.0F);
 	pitch = clamp(pitch, MIN_PITCH, MAX_PITCH);
 	front[0] = cosf(yaw) * cosf(pitch);
 	front[1] = sinf(pitch);
@@ -269,19 +278,29 @@ int main(void) {
 	GLFWwindow *wnd;
 	GLuint vs, fs;
 	GLuint prog;
-	GLuint vao, bos[2];
+	GLuint vao, bos[3];
 	GLint proj_loc;
 	GLint view_loc;
-	GLint model_loc;
 	GLint tex_loc;
-	GLint tile_loc;
-	mat4 proj, view, model;
+	mat4 proj, view;
 	stbi_uc *data;
 	GLuint tex;
 	int w, h, channels;
 	double t0, t1;
 	vec3 center;
 
+	for (int i = 0; i < CHUNK; i++) {
+		for (int j = 0; j < CHUNK; j++) {
+			for (int k = 0; k < CHUNK; k++) {
+				struct instance *instance;
+				instance = &instances[i][j][k];
+				instance->off[0] = i;
+				instance->off[1] = j;
+				instance->off[2] = k;
+				instance->tile = 4;
+			}
+		}
+	}
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
 	}
@@ -307,7 +326,7 @@ int main(void) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, 
-			GL_NEAREST_MIPMAP_NEAREST);
+			GL_NEAREST_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
 			GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 
@@ -317,7 +336,7 @@ int main(void) {
 	data = NULL;
 	glGenVertexArrays(1, &vao);
 	glBindVertexArray(vao);
-	glGenBuffers(2, bos);
+	glGenBuffers(3, bos);
 	glBindBuffer(GL_ARRAY_BUFFER, bos[0]);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
 			vertices, GL_STATIC_DRAW);
@@ -330,19 +349,28 @@ int main(void) {
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[1]);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),
 			indices, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, bos[2]);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(instances),
+			instances, GL_STATIC_DRAW);
+	glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(***instances), 
+			(void *) offsetof(struct instance, off));
+	glEnableVertexAttribArray(3);
+	glVertexAttribDivisor(3, 1);
+	glVertexAttribIPointer(4, 1, GL_INT, sizeof(***instances), 
+			(void *) offsetof(struct instance, tile));
+	glEnableVertexAttribArray(4);
+	glVertexAttribDivisor(4, 1);
 	glBindVertexArray(0);
 	glEnable(GL_DEPTH_TEST);
-	glEnable(GL_CULL_FACE);
-	glCullFace(GL_BACK);
+	//glEnable(GL_CULL_FACE);
+	//glCullFace(GL_BACK);
 	glDepthFunc(GL_LESS);
 	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
 	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
 	prog = load_prog(vs, fs);
 	proj_loc = glGetUniformLocation(prog, "proj");
 	view_loc = glGetUniformLocation(prog, "view");
-	model_loc = glGetUniformLocation(prog, "model");
 	tex_loc = glGetUniformLocation(prog, "tex");
-	tile_loc = glGetUniformLocation(prog, "tile");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
 	glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	glfwSetCursorPosCallback(wnd, mouse_cb);
@@ -372,11 +400,10 @@ int main(void) {
 		}
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glm_perspective(GLM_PI_4f, width / (float) height, 
-				0.1F, 100.0F, proj); 
+				0.01F, 100.0F, proj); 
 		glm_mat4_identity(view);
 		glm_vec3_add(eye, front, center);
 		glm_lookat(eye, center, up, view);
-		glm_mat4_identity(model);
 		glUseProgram(prog);
 		glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *) proj);
 		glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *) view);
@@ -384,19 +411,8 @@ int main(void) {
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
 		glUniform1i(tex_loc, 0);
-		for (int i = 0; i < 64; i++) {
-			for (int j = 0; j < 64; j++) {
-				for (int k = 0; k < 64; k++) {
-					glm_mat4_identity(model);
-					glm_translate(model, (vec3) {i, j, k});
-					glUniformMatrix4fv(model_loc, 1, 
-							GL_FALSE, (float *) model);
-					glUniform1i(tile_loc, 4);
-					glDrawElements(GL_TRIANGLES, COUNT_OF(indices), 
-							GL_UNSIGNED_SHORT, NULL); 
-				}
-			}
-		}
+		glDrawElementsInstanced(GL_TRIANGLES, COUNT_OF(indices), 
+				GL_UNSIGNED_BYTE, NULL, CHUNK * CHUNK * CHUNK); 
 		glfwSwapBuffers(wnd);
 	}
 	return EXIT_SUCCESS;
