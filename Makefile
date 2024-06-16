@@ -1,7 +1,7 @@
 INC=-Ilib/glad/include -Ilib/stb/
 
 all: lib/glad/src/gl.o lib/stb/stb_image.o
-	gcc src/*.c $(INC) -lglfw $^ -lm -o mine -Wall
+	gcc src/*.c $(INC) -lglfw $^ -lm -o mine -Wall -O2
 
 lib/glad/src/gl.o:
 	gcc $(@:.o=.c) -o $@ -Ilib/glad/include -c

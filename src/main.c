@@ -26,9 +26,9 @@
 #define TOP     32U
 
 #define FOR_XYZ \
-	for (x = 0; x < CHUNK_LEN; x++) \
-		for (y = 0; y < CHUNK_LEN; y++) \
-			for (z = 0; z < CHUNK_LEN; z++) 
+	for (x = 1; x < CHUNK_LEN; x++) \
+		for (y = 1; y < CHUNK_LEN; y++) \
+			for (z = 1; z < CHUNK_LEN; z++) 
 
 struct vertex {
 	uint8_t x;
@@ -287,12 +287,19 @@ static void add_vertex(int x, int y, int z) {
 	}
 }
 
-static void create_vertices(void) {
+static void create_map(void) {
 	int x, y, z;
 
 	FOR_XYZ {
 		map[x][y][z] = !!(rand() % 4);
 	}
+}
+
+static void create_vertices(void) {
+	int x, y, z;
+
+	float t0 = glfwGetTime();
+	nvertices = 0;
 	FOR_XYZ {
 		if (!map[x][y][z]) {
 			continue;
@@ -320,11 +327,14 @@ static void create_vertices(void) {
 			faces[x][y][z] |= BACK;
 		}
 	}
+
 	FOR_XYZ {
 		if (map[x][y][z]) {
 			add_vertex(x, y, z);
 		}
 	}
+	float t1 = glfwGetTime();
+	printf("%f\n", t1 - t0);
 }
 
 int main(void) {
@@ -342,12 +352,13 @@ int main(void) {
 	double t0, t1;
 	vec3 center;
 
-	create_vertices();
-
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
 	}
 	atexit(glfwTerminate);
+
+	create_map();
+	create_vertices();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -381,7 +392,7 @@ int main(void) {
 	glBindVertexArray(vao);
 	glGenBuffers(1, &vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
+	glBufferData(GL_ARRAY_BUFFER, nvertices * sizeof(*vertices), 
 			vertices, GL_STATIC_DRAW);
 	glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 4, NULL);
 	glEnableVertexAttribArray(0);
