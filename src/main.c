@@ -11,98 +11,92 @@
 #include <stb_image.h>
 #include <math.h>
 
-#define COUNT_OF(ary) (sizeof(ary) / sizeof(*(ary)))
-#define END_OF(ary) ((ary) + COUNT_OF((ary)))
-
 #define MAX_PITCH (GLM_PI_2f - 0.01F)
 #define MIN_PITCH (-MAX_PITCH)
 #define SENSITIVITY 0.1F
 
+#define CHUNK_LEN 128 
+#define MAX_VERTICES (36 * CHUNK_LEN * CHUNK_LEN * CHUNK_LEN) 
+
+#define BACK     1U
+#define FRONT    2U
+#define LEFT     4U
+#define RIGHT    8U
+#define BOTTOM  16U
+#define TOP     32U
+
+#define FOR_XYZ \
+	for (x = 0; x < CHUNK_LEN; x++) \
+		for (y = 0; y < CHUNK_LEN; y++) \
+			for (z = 0; z < CHUNK_LEN; z++) 
+
 struct vertex {
-	vec3 pos;
-	vec3 nor;
-	vec2 tex;
+	uint8_t x;
+	uint8_t y;
+	uint8_t z;
+	uint8_t t;
 };
 
-struct instance {
-	uint8_t off[3];
-	uint8_t tile;
+static struct vertex cube[6][6] = {
+	{
+		{1, 1, 0, 17},
+		{1, 0, 0, 1},
+		{0, 0, 0, 0},
+		{0, 0, 0, 0},
+		{0, 1, 0, 16},
+		{1, 1, 0, 17},
+	},
+	{
+		{1, 1, 1, 16},
+		{0, 1, 1, 17},
+		{0, 0, 1, 1},
+		{0, 0, 1, 1},
+		{1, 0, 1, 0},
+		{1, 1, 1, 16},
+	},
+	{
+		{0, 1, 1, 16},
+		{0, 1, 0, 17},
+		{0, 0, 0, 1},
+		{0, 0, 0, 1},
+		{0, 0, 1, 0},
+		{0, 1, 1, 16},
+	},
+	{
+		{1, 1, 1, 17},
+		{1, 0, 1, 1},
+		{1, 0, 0, 0},
+		{1, 0, 0, 0},
+		{1, 1, 0, 16},
+		{1, 1, 1, 17},
+	},
+	{
+		{1, 0, 1, 16},
+		{0, 0, 1, 17},
+		{0, 0, 0, 1},
+		{0, 0, 0, 1},
+		{1, 0, 0, 0},
+		{1, 0, 1, 16},
+	},
+	{
+		{1, 1, 1, 0},
+		{1, 1, 0, 16},
+		{0, 1, 0, 17},
+		{0, 1, 0, 17},
+		{0, 1, 1, 1},
+		{1, 1, 1, 0},
+	}
 };
 
-#define CHUNK 128 
-
-static struct instance instances[CHUNK * CHUNK * CHUNK];
-static int8_t map[CHUNK * CHUNK * CHUNK];
-static int instance_count;
-
-static uint8_t indices[] = {
-	/* back */
-	0, 1, 2,
-	2, 3, 0,
-
-	/* front */
-	4, 5, 6,
-	6, 7, 4,
-
-	/* left */
-	8, 9, 10,
-	10, 11, 8,
-
-	/* right */
-	12, 13, 14,
-	14, 15, 12,
-	
-	/* bottom */
-	16, 17, 18,
-	18, 19, 16,
-
-	/* top */
-	20, 21, 22,
-	22, 23, 20
-};
-
-static struct vertex vertices[] = {
-	/* back */
-	{{0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {0.0F, 0.0F}},
-	{{0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {0.0F, 1.0F}},
-	{{-0.5F, -0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {1.0F, 1.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {0.0F, 0.0F, -1.0F}, {1.0F, 0.0F}},
-
-	/* front */
-	{{0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {1.0F, 0.0F}},
-	{{-0.5F, 0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {0.0F, 0.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {0.0F, 1.0F}},
-	{{0.5F, -0.5F, 0.5F}, {0.0F, 0.0F, 1.0F}, {1.0F, 1.0F}},
-
-	/* left */
-	{{-0.5F, 0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}, {0.0F, 0.0F}},
-	{{-0.5F, -0.5F, -0.5F}, {-1.0F, 0.0F, 0.0F}, {0.0F, 1.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {-1.0F, 0.0F, 0.0F}, {1.0F, 1.0F}},
-
-	/* right */
-	{{0.5F, 0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F}},
-	{{0.5F, -0.5F, 0.5F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F}},
-	{{0.5F, -0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}, {1.0F, 1.0F}},
-	{{0.5F, 0.5F, -0.5F}, {1.0F, 0.0F, 0.0F}, {1.0F, 0.0F}},
-
-	/* bottom */
-	{{0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}, {1.0F, 0.0F}},
-	{{-0.5F, -0.5F, 0.5F}, {0.0F, -1.0F, 0.0F}, {0.0F, 0.0F}},
-	{{-0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}, {0.0F, 1.0F}},
-	{{0.5F, -0.5F, -0.5F}, {0.0F, -1.0F, 0.0F}, {1.0F, 1.0F}},
-
-	/* top */
-	{{0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}, {1.0F, 1.0F}},
-	{{0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}, {1.0F, 0.0F}},
-	{{-0.5F, 0.5F, -0.5F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F}},
-	{{-0.5F, 0.5F, 0.5F}, {0.0F, 1.0F, 0.0F}, {0.0F, 1.0F}},
-};
+static uint8_t map[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
+static uint8_t faces[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
+static struct vertex vertices[MAX_VERTICES];
+static int nvertices;
 
 static int width = 640;
 static int height = 480;
 
-static vec3 eye = {0.0F, 0.0F, 100.0F};
+static vec3 eye = {0.0F, 4.0F, 0.0F};
 static vec3 front = {0.0F, 0.0F, -1.0F};
 static vec3 up = {0.0F, 1.0F, 0.0F};
 static vec3 right;
@@ -232,7 +226,7 @@ static void set_data_path(void) {
 	if (!nul) {
 		die("path missing slash\n");
 	}
-	end = END_OF(path);
+	end = path + PATH_MAX; 
 	nul = stpecpy(nul + 1, end, "res");
 	if (nul == end) {
 		die("path too long\n");
@@ -276,18 +270,68 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	glm_normalize(front);
 }
 
-int map_i(int i, int j, int k) {
-	if (i < 0 || i >= CHUNK || j <= 0 || j >= CHUNK || k <= 0 || k >= CHUNK) {
-		return 0;
+static void add_vertex(int x, int y, int z) {
+	struct vertex *v;
+	int i, j;
+
+	for (i = 0; i < 6; i++) {
+		if ((faces[x][y][z] >> i) & 1) {
+			for (j = 0; j < 6; j++) {
+				v = &vertices[nvertices++];
+				v->x = x + cube[i][j].x;
+				v->y = y + cube[i][j].y;
+				v->z = z + cube[i][j].z;
+				v->t = cube[i][j].t; 
+			}
+		}
 	}
-	return map[i * CHUNK * CHUNK + j * CHUNK + k];
+}
+
+static void create_vertices(void) {
+	int x, y, z;
+
+	FOR_XYZ {
+		map[x][y][z] = !!(rand() % 4);
+	}
+	FOR_XYZ {
+		if (!map[x][y][z]) {
+			continue;
+		}
+		faces[x][y][z] = FRONT | RIGHT | TOP; 
+		if (x == 0) {
+			faces[x][y][z] |= LEFT;
+		} else if (map[x - 1][y][z]) {
+			faces[x - 1][y][z] &= ~RIGHT;
+		} else {
+			faces[x][y][z] |= LEFT;
+		}
+		if (y == 0) {
+			faces[x][y][z] |= BOTTOM;
+		} else if (map[x][y - 1][z]) {
+			faces[x][y - 1][z] &= ~TOP;
+		} else {
+			faces[x][y][z] |= BOTTOM;
+		}
+		if (z == 0) {
+			faces[x][y][z] |= BACK;
+		} else if (map[x][y][z - 1]) {
+			faces[x][y][z - 1] &= ~FRONT;
+		} else {
+			faces[x][y][z] |= BACK;
+		}
+	}
+	FOR_XYZ {
+		if (map[x][y][z]) {
+			add_vertex(x, y, z);
+		}
+	}
 }
 
 int main(void) {
 	GLFWwindow *wnd;
 	GLuint vs, fs;
 	GLuint prog;
-	GLuint vao, bos[3];
+	GLuint vao, vbo;
 	GLint proj_loc;
 	GLint view_loc;
 	GLint tex_loc;
@@ -297,43 +341,8 @@ int main(void) {
 	int w, h, channels;
 	double t0, t1;
 	vec3 center;
-	int i, n;
-	int x, y, z;
 
-	n = 0;
-	for (i = 0; i < COUNT_OF(map); i++) {
-		if (rand() % 4) {
-			map[i] = 1;
-			n++;
-		}
-	}
-
-	for (i = 0; i < COUNT_OF(map); i++) {
-		x = i / CHUNK / CHUNK;
-		y = i / CHUNK % CHUNK;
-		z = i % CHUNK;
-
-		if (
-			map_i(x + 1, y, z) &&
-			map_i(x - 1, y, z) &&
-			map_i(x, y + 1, z) &&
-			map_i(x, y - 1, z) &&
-			map_i(x, y + 1, z) &&
-			map_i(x, y - 1, z)
-		) {
-			map[i] = 2;
-			n--;
-		}
-	}
-
-	for (i = 0; i < n; i++) {
-		if (map[i] == 1) {
-			instances[i].off[0] = i / CHUNK / CHUNK;
-			instances[i].off[1] = i / CHUNK % CHUNK;
-			instances[i].off[2] = i % CHUNK; 
-		}
-	}
-	instance_count = n;
+	create_vertices();
 
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
@@ -370,35 +379,17 @@ int main(void) {
 	data = NULL;
 	glGenVertexArrays(1, &vao);
 	glBindVertexArray(vao);
-	glGenBuffers(3, bos);
-	glBindBuffer(GL_ARRAY_BUFFER, bos[0]);
+	glGenBuffers(1, &vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
 			vertices, GL_STATIC_DRAW);
+	glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 4, NULL);
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 
-			sizeof(*vertices), NULL);
-	glEnableVertexAttribArray(2);
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(*vertices), 
-			(void *) offsetof(struct vertex, tex));
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[1]);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),
-			indices, GL_STATIC_DRAW);
-	glBindBuffer(GL_ARRAY_BUFFER, bos[2]);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(*instances) * instance_count, 
-			instances, GL_STATIC_DRAW);
-	glVertexAttribIPointer(3, 3, GL_UNSIGNED_BYTE, sizeof(*instances), 
-			(void *) offsetof(struct instance, off));
-	glEnableVertexAttribArray(3);
-	glVertexAttribDivisor(3, 1);
-	glVertexAttribIPointer(4, 1, GL_UNSIGNED_BYTE, sizeof(*instances), 
-			(void *) offsetof(struct instance, tile));
-	glEnableVertexAttribArray(4);
-	glVertexAttribDivisor(4, 1);
 	glBindVertexArray(0);
 	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS);
 	glEnable(GL_CULL_FACE);
 	glCullFace(GL_BACK);
-	glDepthFunc(GL_LESS);
 	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
 	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
 	prog = load_prog(vs, fs);
@@ -411,12 +402,16 @@ int main(void) {
 	glfwSwapInterval(1);
 	glfwShowWindow(wnd);
 	t0 = glfwGetTime();
+
+	float total = 0.0F;
+	int nframes = 0;
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
 		t1 = glfwGetTime();
 		dt = t1 - t0;
 		t0 = t1;
-		printf("\r%f", 1.0F / dt);
+		nframes++;
+		total += dt;
 		fflush(stdout);
 		glm_cross(front, up, right);
 		glm_normalize(right);
@@ -445,9 +440,9 @@ int main(void) {
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
 		glUniform1i(tex_loc, 0);
-		glDrawElementsInstanced(GL_TRIANGLES, COUNT_OF(indices), 
-				GL_UNSIGNED_BYTE, NULL, instance_count); 
+		glDrawArrays(GL_TRIANGLES, 0, nvertices);
 		glfwSwapBuffers(wnd);
 	}
+	printf("%f\n", nframes / total);
 	return EXIT_SUCCESS;
 }

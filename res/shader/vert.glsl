@@ -1,19 +1,17 @@
 #version 330
 
-layout(location=0) in vec3 pos;
-layout(location=1) in vec3 nor;
-layout(location=2) in vec2 tex;
-layout(location=3) in uvec3 off;
-layout(location=4) in uint tile;
+layout(location=0) in uvec4 vertex;
 
 uniform mat4 proj;
 uniform mat4 view;
 
-out vec2 vs_tex;
-flat out vec2 vs_uv;
+out vec2 uv;
 
 void main() {
-	vs_tex = tex;
-	vs_uv = vec2(tile & 15u, tile >> 4u);
-	gl_Position = proj * view * (vec4(pos + off, 1.0F)); 
+	vec4 xyzw;
+	uint tile;
+	xyzw = vec4(vec3(vertex), 1.0F);
+	tile = vertex[3];
+	uv = vec2(tile & 15u, tile >> 4u) / 16.0F;
+	gl_Position = proj * view * xyzw; 
 }
