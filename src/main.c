@@ -25,13 +25,15 @@ struct vertex {
 };
 
 struct instance {
-	vec3 off;
-	int tile;
+	uint8_t off[3];
+	uint8_t tile;
 };
 
-#define CHUNK 64
+#define CHUNK 128 
 
-static struct instance instances[CHUNK][CHUNK][CHUNK];
+static struct instance instances[CHUNK * CHUNK * CHUNK];
+static int8_t map[CHUNK * CHUNK * CHUNK];
+static int instance_count;
 
 static uint8_t indices[] = {
 	/* back */
@@ -100,7 +102,7 @@ static struct vertex vertices[] = {
 static int width = 640;
 static int height = 480;
 
-static vec3 eye = {0.0F, 0.0F, 10.0F};
+static vec3 eye = {0.0F, 0.0F, 100.0F};
 static vec3 front = {0.0F, 0.0F, -1.0F};
 static vec3 up = {0.0F, 1.0F, 0.0F};
 static vec3 right;
@@ -274,6 +276,13 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	glm_normalize(front);
 }
 
+int map_i(int i, int j, int k) {
+	if (i < 0 || i >= CHUNK || j <= 0 || j >= CHUNK || k <= 0 || k >= CHUNK) {
+		return 0;
+	}
+	return map[i * CHUNK * CHUNK + j * CHUNK + k];
+}
+
 int main(void) {
 	GLFWwindow *wnd;
 	GLuint vs, fs;
@@ -288,19 +297,44 @@ int main(void) {
 	int w, h, channels;
 	double t0, t1;
 	vec3 center;
+	int i, n;
+	int x, y, z;
 
-	for (int i = 0; i < CHUNK; i++) {
-		for (int j = 0; j < CHUNK; j++) {
-			for (int k = 0; k < CHUNK; k++) {
-				struct instance *instance;
-				instance = &instances[i][j][k];
-				instance->off[0] = i;
-				instance->off[1] = j;
-				instance->off[2] = k;
-				instance->tile = 4;
-			}
+	n = 0;
+	for (i = 0; i < COUNT_OF(map); i++) {
+		if (rand() % 4) {
+			map[i] = 1;
+			n++;
 		}
 	}
+
+	for (i = 0; i < COUNT_OF(map); i++) {
+		x = i / CHUNK / CHUNK;
+		y = i / CHUNK % CHUNK;
+		z = i % CHUNK;
+
+		if (
+			map_i(x + 1, y, z) &&
+			map_i(x - 1, y, z) &&
+			map_i(x, y + 1, z) &&
+			map_i(x, y - 1, z) &&
+			map_i(x, y + 1, z) &&
+			map_i(x, y - 1, z)
+		) {
+			map[i] = 2;
+			n--;
+		}
+	}
+
+	for (i = 0; i < n; i++) {
+		if (map[i] == 1) {
+			instances[i].off[0] = i / CHUNK / CHUNK;
+			instances[i].off[1] = i / CHUNK % CHUNK;
+			instances[i].off[2] = i % CHUNK; 
+		}
+	}
+	instance_count = n;
+
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
 	}
@@ -350,20 +384,20 @@ int main(void) {
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices),
 			indices, GL_STATIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, bos[2]);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(instances),
+	glBufferData(GL_ARRAY_BUFFER, sizeof(*instances) * instance_count, 
 			instances, GL_STATIC_DRAW);
-	glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(***instances), 
+	glVertexAttribIPointer(3, 3, GL_UNSIGNED_BYTE, sizeof(*instances), 
 			(void *) offsetof(struct instance, off));
 	glEnableVertexAttribArray(3);
 	glVertexAttribDivisor(3, 1);
-	glVertexAttribIPointer(4, 1, GL_INT, sizeof(***instances), 
+	glVertexAttribIPointer(4, 1, GL_UNSIGNED_BYTE, sizeof(*instances), 
 			(void *) offsetof(struct instance, tile));
 	glEnableVertexAttribArray(4);
 	glVertexAttribDivisor(4, 1);
 	glBindVertexArray(0);
 	glEnable(GL_DEPTH_TEST);
-	//glEnable(GL_CULL_FACE);
-	//glCullFace(GL_BACK);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
 	glDepthFunc(GL_LESS);
 	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
 	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
@@ -412,7 +446,7 @@ int main(void) {
 		glBindTexture(GL_TEXTURE_2D, tex);
 		glUniform1i(tex_loc, 0);
 		glDrawElementsInstanced(GL_TRIANGLES, COUNT_OF(indices), 
-				GL_UNSIGNED_BYTE, NULL, CHUNK * CHUNK * CHUNK); 
+				GL_UNSIGNED_BYTE, NULL, instance_count); 
 		glfwSwapBuffers(wnd);
 	}
 	return EXIT_SUCCESS;
