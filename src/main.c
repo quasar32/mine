@@ -15,7 +15,7 @@
 #define MIN_PITCH (-MAX_PITCH)
 #define SENSITIVITY 0.1F
 
-#define CHUNK_LEN 128 
+#define CHUNK_LEN 9 
 #define MAX_VERTICES (36 * CHUNK_LEN * CHUNK_LEN * CHUNK_LEN) 
 
 #define BACK     1U
@@ -25,16 +25,26 @@
 #define BOTTOM  16U
 #define TOP     32U
 
-#define FOR_XYZ \
-	for (x = 1; x < CHUNK_LEN; x++) \
-		for (y = 1; y < CHUNK_LEN; y++) \
-			for (z = 1; z < CHUNK_LEN; z++) 
+#define FOR_XYZ_ALL \
+	for (x = 0; x < CHUNK_LEN; x++) \
+		for (y = 0; y < CHUNK_LEN; y++) \
+			for (z = 0; z < CHUNK_LEN; z++) 
+
+#define FOR_XYZ(pos, min, max) \
+	for (pos[0] = min[0]; pos[0] < max[0]; pos[0]++) \
+		for (pos[1] = min[1]; pos[1] < max[1]; pos[1]++) \
+			for (pos[2] = min[2]; pos[2] < max[2]; pos[2]++) 
 
 struct vertex {
 	uint8_t x;
 	uint8_t y;
 	uint8_t z;
 	uint8_t t;
+};
+
+struct prism {
+	vec3 min;
+	vec3 max;
 };
 
 static struct vertex cube[6][6] = {
@@ -88,6 +98,15 @@ static struct vertex cube[6][6] = {
 	}
 };
 
+static struct prism model_prism = { 
+	{-0.3F, 0.0F, -0.3F},
+	{0.3F, 1.8F, 0.3F} 
+};
+
+static vec3 player_pos = {2.0F, 0.5F, 2.0F};
+static vec3 player_vel;
+static int grounded;
+
 static uint8_t map[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
 static uint8_t faces[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
 static struct vertex vertices[MAX_VERTICES];
@@ -96,8 +115,9 @@ static int nvertices;
 static int width = 640;
 static int height = 480;
 
-static vec3 eye = {0.0F, 4.0F, 0.0F};
+static vec3 eye; 
 static vec3 front = {0.0F, 0.0F, -1.0F};
+static vec3 forw = {0.0F, 0.0F, -1.0F};
 static vec3 up = {0.0F, 1.0F, 0.0F};
 static vec3 right;
 
@@ -268,6 +288,10 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	front[1] = sinf(pitch);
 	front[2] = sinf(yaw) * cosf(pitch);
 	glm_normalize(front);
+	forw[0] = cosf(yaw);
+	forw[1] = 0.0F;
+	forw[2] = sinf(yaw);
+	glm_normalize(forw);
 }
 
 static void add_vertex(int x, int y, int z) {
@@ -281,26 +305,35 @@ static void add_vertex(int x, int y, int z) {
 				v->x = x + cube[i][j].x;
 				v->y = y + cube[i][j].y;
 				v->z = z + cube[i][j].z;
-				v->t = cube[i][j].t; 
+				v->t = cube[i][j].t + 71; 
 			}
 		}
 	}
 }
 
 static void create_map(void) {
-	int x, y, z;
+	int x, z;
 
-	FOR_XYZ {
-		map[x][y][z] = !!(rand() % 4);
+	for (x = 0; x < CHUNK_LEN; x++) {
+		for (z = 0; z < CHUNK_LEN; z++) {
+			map[x][0][z] = 1;
+			if (x == 0 || x == CHUNK_LEN - 1 || z == 0 || z== CHUNK_LEN - 1) {
+				if (rand() % 3) {
+					map[x][1][z] = 1;
+				}
+				if (rand() & 1) {
+					map[x][2][z] = 1;
+				}
+			}
+		}
 	}
 }
 
 static void create_vertices(void) {
 	int x, y, z;
 
-	float t0 = glfwGetTime();
 	nvertices = 0;
-	FOR_XYZ {
+	FOR_XYZ_ALL {
 		if (!map[x][y][z]) {
 			continue;
 		}
@@ -328,13 +361,103 @@ static void create_vertices(void) {
 		}
 	}
 
-	FOR_XYZ {
+	FOR_XYZ_ALL {
 		if (map[x][y][z]) {
 			add_vertex(x, y, z);
 		}
 	}
-	float t1 = glfwGetTime();
-	printf("%f\n", t1 - t0);
+}
+
+static int axis_collide(struct prism *a, struct prism *b, int axis) {
+	return a->max[axis] > b->min[axis] && b->max[axis] > a->min[axis];
+}
+
+static int prism_collide(struct prism *a, struct prism *b) {
+	int i;
+	for (i = 0; i < 3; i++) {
+		if (!axis_collide(a, b, i)) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static int clampi(int v, int l, int h) {
+	return v < l ? l : (v > h ? h : v);
+}
+
+static void get_player_prism(struct prism *prism, int axis) {
+	prism->min[0] = player_pos[0] - 0.3F;
+	prism->min[1] = player_pos[1];
+	prism->min[2] = player_pos[2] - 0.3F; 
+	prism->max[0] = player_pos[0] + 0.3F;
+	prism->max[1] = player_pos[1] + 1.8F;
+	prism->max[2] = player_pos[2] + 0.3F;
+	if (player_vel[axis] < 0.0F) {
+		prism->min[axis] += player_vel[axis] * dt;
+	} else {
+		prism->max[axis] += player_vel[axis] * dt;
+	}
+}
+
+static void get_block_prism(struct prism *prism, ivec3 v) {
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		prism->min[i] = v[i] - 0.5F;
+		prism->max[i] = v[i] + 0.5F;
+	}
+}
+
+static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		min[i] = floorf(prism->min[i] - 0.5F);
+		max[i] = ceilf(prism->max[i] + 0.5F);
+		min[i] = clampi(min[i], 0, CHUNK_LEN);
+		max[i] = clampi(max[i], 0, CHUNK_LEN);
+	}
+}
+
+static void axis_move(int axis) {
+	struct prism player_prism;
+	struct prism block_prism;
+	ivec3 pos, min, max;
+	float new, tmp;
+
+	get_player_prism(&player_prism, axis);
+	get_detect_bounds(&player_prism, min, max);
+	new = player_pos[axis] + player_vel[axis] * dt;
+	FOR_XYZ (pos, min, max) {
+		if (!map[pos[0]][pos[1]][pos[2]]) {
+			continue;
+		}
+		get_block_prism(&block_prism, pos);
+		if (!prism_collide(&player_prism, &block_prism)) {
+			continue;
+		}
+		if (player_vel[axis] < 0.0F) {
+			tmp = block_prism.max[axis] - model_prism.min[axis];
+			new = fmaxf(new, tmp);
+			if (axis == 1) {
+				player_vel[1] = 0.0F;
+				grounded = 1;
+			}
+		} else if (player_vel[axis] > 0.0F) {
+			tmp = block_prism.min[axis] - model_prism.max[axis];
+			new = fminf(new, tmp);
+		}
+	}
+	player_pos[axis] = new;
+}
+
+static void player_move(void) {
+	int axis;
+
+	for (axis = 0; axis < 3; axis++) {
+		axis_move(axis);
+	}
 }
 
 int main(void) {
@@ -342,10 +465,9 @@ int main(void) {
 	GLuint vs, fs;
 	GLuint prog;
 	GLuint vao, vbo;
-	GLint proj_loc;
-	GLint view_loc;
+	GLint world_loc;
 	GLint tex_loc;
-	mat4 proj, view;
+	mat4 proj, view, world;
 	stbi_uc *data;
 	GLuint tex;
 	int w, h, channels;
@@ -404,8 +526,7 @@ int main(void) {
 	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
 	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
 	prog = load_prog(vs, fs);
-	proj_loc = glGetUniformLocation(prog, "proj");
-	view_loc = glGetUniformLocation(prog, "view");
+	world_loc = glGetUniformLocation(prog, "world");
 	tex_loc = glGetUniformLocation(prog, "tex");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
 	glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -413,40 +534,45 @@ int main(void) {
 	glfwSwapInterval(1);
 	glfwShowWindow(wnd);
 	t0 = glfwGetTime();
-
-	float total = 0.0F;
-	int nframes = 0;
+	glUseProgram(prog);
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
 		t1 = glfwGetTime();
-		dt = t1 - t0;
+		dt = clamp(t1 - t0, 0.0001F, 1000.0F);
 		t0 = t1;
-		nframes++;
-		total += dt;
-		fflush(stdout);
-		glm_cross(front, up, right);
+		glm_cross(forw, up, right);
 		glm_normalize(right);
+		player_vel[0] = 0.0F;
+		player_vel[2] = 0.0F;
 		if (glfwGetKey(wnd, GLFW_KEY_W)) {
-			glm_vec3_muladds(front, 8.0F * dt, eye);
-		}
+			glm_vec3_muladds(forw, 5.0F, player_vel);
+		} 
 		if (glfwGetKey(wnd, GLFW_KEY_S)) {
-			glm_vec3_mulsubs(front, 8.0F * dt, eye);
+			glm_vec3_mulsubs(forw, 5.0F, player_vel);
 		}
 		if (glfwGetKey(wnd, GLFW_KEY_A)) {
-			glm_vec3_mulsubs(right, 8.0F * dt, eye);
-		}
+			glm_vec3_mulsubs(right, 5.0F, player_vel);
+		} 
 		if (glfwGetKey(wnd, GLFW_KEY_D)) {
-			glm_vec3_muladds(right, 8.0F * dt, eye);
+			glm_vec3_muladds(right, 5.0F, player_vel);
 		}
+		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && grounded) {
+			glm_vec3_muladds(up, 8.0F, player_vel);
+		}
+		grounded = 0;
+		player_move();
+		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
+		glm_vec3_copy(player_pos, eye);
+		eye[1] += 1.7F;
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
 		glm_perspective(GLM_PI_4f, width / (float) height, 
 				0.01F, 100.0F, proj); 
-		glm_mat4_identity(view);
 		glm_vec3_add(eye, front, center);
 		glm_lookat(eye, center, up, view);
+		glm_mat4_mul(proj, view, world);
 		glUseProgram(prog);
-		glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *) proj);
-		glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *) view);
+		glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) world);
 		glBindVertexArray(vao);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
@@ -454,6 +580,5 @@ int main(void) {
 		glDrawArrays(GL_TRIANGLES, 0, nvertices);
 		glfwSwapBuffers(wnd);
 	}
-	printf("%f\n", nframes / total);
 	return EXIT_SUCCESS;
 }
