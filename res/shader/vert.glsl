@@ -1,16 +1,24 @@
 #version 330
 
-layout(location=0) in uvec4 vertex;
+#define X(v) (((v)       ) & 31U)
+#define Y(v) (((v) >>  5U) & 31U)
+#define Z(v) (((v) >> 10U) & 31U)
+#define U(v) (((v) >> 15U) & 31U)
+#define V(v) (((v) >> 20U) & 31U)
+
+layout(location=0) in uint vert;
 
 uniform mat4 world;
 
 out vec2 uv;
+out float dist;
 
 void main() {
+	vec3 xyz;
 	vec4 xyzw;
-	uint tile;
-	xyzw = vec4(vec3(vertex) - 0.5F, 1.0F);
-	tile = vertex[3];
-	uv = vec2(tile & 15u, tile >> 4u) / 16.0F;
+	xyz = vec3(X(vert), Y(vert), Z(vert));
+	xyzw = vec4(xyz - 0.5F, 1.0F);
+	uv = vec2(U(vert), V(vert)) / 16.0F; 
 	gl_Position = world * xyzw; 
+	dist = gl_Position.w;
 }

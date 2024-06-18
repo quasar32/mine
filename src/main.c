@@ -15,7 +15,7 @@
 #define MIN_PITCH (-MAX_PITCH)
 #define SENSITIVITY 0.1F
 
-#define CHUNK_LEN 9 
+#define CHUNK_LEN 16 
 #define MAX_VERTICES (36 * CHUNK_LEN * CHUNK_LEN * CHUNK_LEN) 
 
 #define BACK     1U
@@ -36,11 +36,13 @@
 			for (pos[2] = min[2]; pos[2] < max[2]; pos[2]++) 
 
 struct vertex {
-	uint8_t x;
-	uint8_t y;
-	uint8_t z;
-	uint8_t t;
+	uint32_t x : 5;
+	uint32_t y : 5;
+	uint32_t z : 5;
+	uint32_t u : 5;
+	uint32_t v : 5;
 };
+
 
 struct prism {
 	vec3 min;
@@ -49,52 +51,52 @@ struct prism {
 
 static struct vertex cube[6][6] = {
 	{
-		{1, 1, 0, 17},
-		{1, 0, 0, 1},
-		{0, 0, 0, 0},
-		{0, 0, 0, 0},
-		{0, 1, 0, 16},
-		{1, 1, 0, 17},
+		{1, 1, 0, 1, 1},
+		{1, 0, 0, 1, 0},
+		{0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0},
+		{0, 1, 0, 0, 1},
+		{1, 1, 0, 1, 1},
 	},
 	{
-		{1, 1, 1, 16},
-		{0, 1, 1, 17},
-		{0, 0, 1, 1},
-		{0, 0, 1, 1},
-		{1, 0, 1, 0},
-		{1, 1, 1, 16},
+		{1, 1, 1, 0, 1},
+		{0, 1, 1, 1, 1},
+		{0, 0, 1, 1, 0},
+		{0, 0, 1, 1, 0},
+		{1, 0, 1, 0, 0},
+		{1, 1, 1, 0, 1},
 	},
 	{
-		{0, 1, 1, 16},
-		{0, 1, 0, 17},
-		{0, 0, 0, 1},
-		{0, 0, 0, 1},
-		{0, 0, 1, 0},
-		{0, 1, 1, 16},
+		{0, 1, 1, 0, 1},
+		{0, 1, 0, 1, 1},
+		{0, 0, 0, 1, 0},
+		{0, 0, 0, 1, 0},
+		{0, 0, 1, 0, 0},
+		{0, 1, 1, 0, 1},
 	},
 	{
-		{1, 1, 1, 17},
-		{1, 0, 1, 1},
-		{1, 0, 0, 0},
-		{1, 0, 0, 0},
-		{1, 1, 0, 16},
-		{1, 1, 1, 17},
+		{1, 1, 1, 1, 1},
+		{1, 0, 1, 1, 0},
+		{1, 0, 0, 0, 0},
+		{1, 0, 0, 0, 0},
+		{1, 1, 0, 0, 1},
+		{1, 1, 1, 1, 1},
 	},
 	{
-		{1, 0, 1, 16},
-		{0, 0, 1, 17},
-		{0, 0, 0, 1},
-		{0, 0, 0, 1},
-		{1, 0, 0, 0},
-		{1, 0, 1, 16},
+		{1, 0, 1, 0, 1},
+		{0, 0, 1, 1, 1},
+		{0, 0, 0, 1, 0},
+		{0, 0, 0, 1, 0},
+		{1, 0, 0, 0, 0},
+		{1, 0, 1, 0, 1},
 	},
 	{
-		{1, 1, 1, 0},
-		{1, 1, 0, 16},
-		{0, 1, 0, 17},
-		{0, 1, 0, 17},
-		{0, 1, 1, 1},
-		{1, 1, 1, 0},
+		{1, 1, 1, 0, 0},
+		{1, 1, 0, 0, 1},
+		{0, 1, 0, 1, 1},
+		{0, 1, 0, 1, 1},
+		{0, 1, 1, 1, 0},
+		{1, 1, 1, 0, 0},
 	}
 };
 
@@ -294,10 +296,21 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	glm_normalize(forw);
 }
 
+enum block {
+	AIR,
+	GRAVEL,
+};
+
+static int blocks[][6] = {
+	{},
+	{2, 2, 2, 2, 0, 1},
+};
+
 static void add_vertex(int x, int y, int z) {
 	struct vertex *v;
-	int i, j;
+	int i, j, b;
 
+	b = map[x][y][z];
 	for (i = 0; i < 6; i++) {
 		if ((faces[x][y][z] >> i) & 1) {
 			for (j = 0; j < 6; j++) {
@@ -305,7 +318,8 @@ static void add_vertex(int x, int y, int z) {
 				v->x = x + cube[i][j].x;
 				v->y = y + cube[i][j].y;
 				v->z = z + cube[i][j].z;
-				v->t = cube[i][j].t + 71; 
+				v->u = blocks[b][i] + cube[i][j].u; 
+				v->v = cube[i][j].v;
 			}
 		}
 	}
@@ -317,12 +331,13 @@ static void create_map(void) {
 	for (x = 0; x < CHUNK_LEN; x++) {
 		for (z = 0; z < CHUNK_LEN; z++) {
 			map[x][0][z] = 1;
-			if (x == 0 || x == CHUNK_LEN - 1 || z == 0 || z== CHUNK_LEN - 1) {
+			if (x == 0 || x == CHUNK_LEN - 1 || 
+					z == 0 || z == CHUNK_LEN - 1) {
 				if (rand() % 3) {
 					map[x][1][z] = 1;
 				}
 				if (rand() & 1) {
-					map[x][2][z] = 1;
+					map[x][3][z] = 1;
 				}
 			}
 		}
@@ -441,13 +456,13 @@ static void axis_move(int axis) {
 			tmp = block_prism.max[axis] - model_prism.min[axis];
 			new = fmaxf(new, tmp);
 			if (axis == 1) {
-				player_vel[1] = 0.0F;
 				grounded = 1;
 			}
 		} else if (player_vel[axis] > 0.0F) {
 			tmp = block_prism.min[axis] - model_prism.max[axis];
 			new = fminf(new, tmp);
 		}
+		player_vel[axis] = 0.0F;
 	}
 	player_pos[axis] = new;
 }
@@ -507,6 +522,7 @@ int main(void) {
 			GL_NEAREST);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 
 			0, GL_RGB, GL_UNSIGNED_BYTE, data); 
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 4);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	stbi_image_free(data);
 	data = NULL;
@@ -516,7 +532,7 @@ int main(void) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	glBufferData(GL_ARRAY_BUFFER, nvertices * sizeof(*vertices), 
 			vertices, GL_STATIC_DRAW);
-	glVertexAttribIPointer(0, 4, GL_UNSIGNED_BYTE, 4, NULL);
+	glVertexAttribIPointer(0, 1, GL_UNSIGNED_INT, 4, NULL);
 	glEnableVertexAttribArray(0);
 	glBindVertexArray(0);
 	glEnable(GL_DEPTH_TEST);
