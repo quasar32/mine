@@ -18,10 +18,10 @@
 #define CHUNK_LEN 16 
 #define MAX_VERTICES (36 * CHUNK_LEN * CHUNK_LEN * CHUNK_LEN) 
 
-#define BACK     1U
-#define FRONT    2U
-#define LEFT     4U
-#define RIGHT    8U
+#define LEFT     1U
+#define RIGHT    2U
+#define BACK     4U
+#define FRONT    8U
 #define BOTTOM  16U
 #define TOP     32U
 
@@ -41,8 +41,8 @@ struct vertex {
 	uint32_t z : 5;
 	uint32_t u : 5;
 	uint32_t v : 5;
+	uint32_t l : 1;
 };
-
 
 struct prism {
 	vec3 min;
@@ -51,52 +51,52 @@ struct prism {
 
 static struct vertex cube[6][6] = {
 	{
-		{1, 1, 0, 1, 1},
-		{1, 0, 0, 1, 0},
-		{0, 0, 0, 0, 0},
-		{0, 0, 0, 0, 0},
-		{0, 1, 0, 0, 1},
-		{1, 1, 0, 1, 1},
+		{0, 1, 1, 0, 0},
+		{0, 1, 0, 1, 0},
+		{0, 0, 0, 1, 1},
+		{0, 0, 0, 1, 1},
+		{0, 0, 1, 0, 1},
+		{0, 1, 1, 0, 0},
 	},
 	{
-		{1, 1, 1, 0, 1},
-		{0, 1, 1, 1, 1},
-		{0, 0, 1, 1, 0},
-		{0, 0, 1, 1, 0},
-		{1, 0, 1, 0, 0},
-		{1, 1, 1, 0, 1},
+		{1, 1, 1, 1, 0},
+		{1, 0, 1, 1, 1},
+		{1, 0, 0, 0, 1},
+		{1, 0, 0, 0, 1},
+		{1, 1, 0, 0, 0},
+		{1, 1, 1, 1, 0},
 	},
 	{
-		{0, 1, 1, 0, 1},
-		{0, 1, 0, 1, 1},
-		{0, 0, 0, 1, 0},
-		{0, 0, 0, 1, 0},
-		{0, 0, 1, 0, 0},
-		{0, 1, 1, 0, 1},
-	},
-	{
-		{1, 1, 1, 1, 1},
-		{1, 0, 1, 1, 0},
-		{1, 0, 0, 0, 0},
-		{1, 0, 0, 0, 0},
-		{1, 1, 0, 0, 1},
-		{1, 1, 1, 1, 1},
-	},
-	{
-		{1, 0, 1, 0, 1},
-		{0, 0, 1, 1, 1},
-		{0, 0, 0, 1, 0},
-		{0, 0, 0, 1, 0},
-		{1, 0, 0, 0, 0},
-		{1, 0, 1, 0, 1},
+		{1, 1, 0, 1, 0},
+		{1, 0, 0, 1, 1},
+		{0, 0, 0, 0, 1},
+		{0, 0, 0, 0, 1},
+		{0, 1, 0, 0, 0},
+		{1, 1, 0, 1, 0},
 	},
 	{
 		{1, 1, 1, 0, 0},
-		{1, 1, 0, 0, 1},
-		{0, 1, 0, 1, 1},
-		{0, 1, 0, 1, 1},
 		{0, 1, 1, 1, 0},
+		{0, 0, 1, 1, 1},
+		{0, 0, 1, 1, 1},
+		{1, 0, 1, 0, 1},
 		{1, 1, 1, 0, 0},
+	},
+	{
+		{1, 0, 1, 0, 0},
+		{0, 0, 1, 1, 0},
+		{0, 0, 0, 1, 1},
+		{0, 0, 0, 1, 1},
+		{1, 0, 0, 0, 1},
+		{1, 0, 1, 0, 0},
+	},
+	{
+		{1, 1, 1, 0, 1},
+		{1, 1, 0, 0, 0},
+		{0, 1, 0, 1, 0},
+		{0, 1, 0, 1, 0},
+		{0, 1, 1, 1, 1},
+		{1, 1, 1, 0, 1},
 	}
 };
 
@@ -124,6 +124,9 @@ static vec3 up = {0.0F, 1.0F, 0.0F};
 static vec3 right;
 
 static float dt;
+
+static ivec3 pos_ahead;
+static uint8_t *block_ahead;
 
 [[noreturn]]
 static void die(const char *fmt, ...) {
@@ -262,12 +265,13 @@ static float clamp(float v, float l, float h) {
 	return fminf(fmaxf(v, l), h);
 }
 
+static float yaw = -GLM_PI_2f; 
+static float pitch;
+
 static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	static int first;
 	static double last_x;
 	static double last_y;
-	static float yaw = -GLM_PI_2f; 
-	static float pitch;
 	float off_x;
 	float off_y;
 
@@ -296,21 +300,22 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	glm_normalize(forw);
 }
 
-enum block {
+enum block : uint8_t {
 	AIR,
 	GRAVEL,
 };
 
-static int blocks[][6] = {
+static uint8_t blocks[][6] = {
 	{},
 	{2, 2, 2, 2, 0, 1},
 };
 
 static void add_vertex(int x, int y, int z) {
 	struct vertex *v;
-	int i, j, b;
+	int i, j;
+	uint8_t *b;
 
-	b = map[x][y][z];
+	b = &map[x][y][z];
 	for (i = 0; i < 6; i++) {
 		if ((faces[x][y][z] >> i) & 1) {
 			for (j = 0; j < 6; j++) {
@@ -318,8 +323,9 @@ static void add_vertex(int x, int y, int z) {
 				v->x = x + cube[i][j].x;
 				v->y = y + cube[i][j].y;
 				v->z = z + cube[i][j].z;
-				v->u = blocks[b][i] + cube[i][j].u; 
+				v->u = blocks[*b][i] + cube[i][j].u; 
 				v->v = cube[i][j].v;
+				v->l = (b == block_ahead);
 			}
 		}
 	}
@@ -331,14 +337,8 @@ static void create_map(void) {
 	for (x = 0; x < CHUNK_LEN; x++) {
 		for (z = 0; z < CHUNK_LEN; z++) {
 			map[x][0][z] = 1;
-			if (x == 0 || x == CHUNK_LEN - 1 || 
-					z == 0 || z == CHUNK_LEN - 1) {
-				if (rand() % 3) {
-					map[x][1][z] = 1;
-				}
-				if (rand() & 1) {
-					map[x][3][z] = 1;
-				}
+			if (rand() % 16 == 0) {
+				map[x][1][z] = 1;
 			}
 		}
 	}
@@ -401,13 +401,17 @@ static int clampi(int v, int l, int h) {
 	return v < l ? l : (v > h ? h : v);
 }
 
-static void get_player_prism(struct prism *prism, int axis) {
+static void get_player_prism(struct prism *prism) {
 	prism->min[0] = player_pos[0] - 0.3F;
 	prism->min[1] = player_pos[1];
 	prism->min[2] = player_pos[2] - 0.3F; 
 	prism->max[0] = player_pos[0] + 0.3F;
 	prism->max[1] = player_pos[1] + 1.8F;
 	prism->max[2] = player_pos[2] + 0.3F;
+}
+
+static void get_moving_player_prism(struct prism *prism, int axis) {
+	get_player_prism(prism);
 	if (player_vel[axis] < 0.0F) {
 		prism->min[axis] += player_vel[axis] * dt;
 	} else {
@@ -422,6 +426,25 @@ static void get_block_prism(struct prism *prism, ivec3 v) {
 		prism->min[i] = v[i] - 0.5F;
 		prism->max[i] = v[i] + 0.5F;
 	}
+}
+
+static void get_block_coord(vec3 v, ivec3 iv) {
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		iv[i] = floorf(v[i] + 0.5F);
+	}
+}
+
+static uint8_t *map_get(ivec3 v) {
+	int i;
+	
+	for (i = 0; i < 3; i++) {
+		if (v[i] < 0 || v[i] >= CHUNK_LEN) {
+			return NULL;
+		}
+	}
+	return &map[v[0]][v[1]][v[2]];
 }
 
 static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
@@ -441,7 +464,7 @@ static void axis_move(int axis) {
 	ivec3 pos, min, max;
 	float new, tmp;
 
-	get_player_prism(&player_prism, axis);
+	get_moving_player_prism(&player_prism, axis);
 	get_detect_bounds(&player_prism, min, max);
 	new = player_pos[axis] + player_vel[axis] * dt;
 	FOR_XYZ (pos, min, max) {
@@ -475,11 +498,61 @@ static void player_move(void) {
 	}
 }
 
+static void find_block_ahead(void) {
+	int i;
+	vec3 v;
+
+	glm_vec3_copy(player_pos, v);
+	v[1] += 1.7F;
+	for (i = 0; i < 4; i++) {
+		glm_vec3_add(v, front, v);
+		get_block_coord(v, pos_ahead);
+		block_ahead = map_get(pos_ahead);
+		if (block_ahead && *block_ahead) {
+			return;
+		}
+	}
+	block_ahead = NULL;
+}
+
+static void remove_block(void) {
+	if (block_ahead) {
+		*block_ahead = 0;
+	}
+}
+
+static void add_block(void) {
+	ivec3 iv;
+	int dir;
+	uint8_t *b;
+
+	glm_ivec3_copy(pos_ahead, iv);
+	dir = (unsigned) roundf(yaw / GLM_PI_2f) & 3U;
+	switch (dir) {
+	case 0:
+		--iv[0];
+		break;
+	case 1:
+		--iv[2];
+		break;
+	case 2:
+		++iv[0];
+		break;
+	case 3:
+		++iv[2];
+		break;
+	}
+	b = map_get(iv);
+	if (b) {
+		*b = 1;
+	}
+}
+
 int main(void) {
 	GLFWwindow *wnd;
-	GLuint vs, fs;
-	GLuint prog;
-	GLuint vao, vbo;
+	GLuint block_vs, block_fs;
+	GLuint block_prog;
+	GLuint vao, vbo[2];
 	GLint world_loc;
 	GLint tex_loc;
 	mat4 proj, view, world;
@@ -488,14 +561,13 @@ int main(void) {
 	int w, h, channels;
 	double t0, t1;
 	vec3 center;
+	int held_left, held_right;
 
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
 	}
 	atexit(glfwTerminate);
-
 	create_map();
-	create_vertices();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -528,10 +600,10 @@ int main(void) {
 	data = NULL;
 	glGenVertexArrays(1, &vao);
 	glBindVertexArray(vao);
-	glGenBuffers(1, &vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, nvertices * sizeof(*vertices), 
-			vertices, GL_STATIC_DRAW);
+	glGenBuffers(2, vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
+			NULL, GL_DYNAMIC_DRAW);
 	glVertexAttribIPointer(0, 1, GL_UNSIGNED_INT, 4, NULL);
 	glEnableVertexAttribArray(0);
 	glBindVertexArray(0);
@@ -539,18 +611,20 @@ int main(void) {
 	glDepthFunc(GL_LESS);
 	glEnable(GL_CULL_FACE);
 	glCullFace(GL_BACK);
-	vs = load_shader(GL_VERTEX_SHADER, "shader/vert.glsl"); 
-	fs = load_shader(GL_FRAGMENT_SHADER, "shader/frag.glsl");
-	prog = load_prog(vs, fs);
-	world_loc = glGetUniformLocation(prog, "world");
-	tex_loc = glGetUniformLocation(prog, "tex");
+	block_vs = load_shader(GL_VERTEX_SHADER, "shader/block.vert"); 
+	block_fs = load_shader(GL_FRAGMENT_SHADER, "shader/block.frag");
+	block_prog = load_prog(block_vs, block_fs);
+	world_loc = glGetUniformLocation(block_prog, "world");
+	tex_loc = glGetUniformLocation(block_prog, "tex");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
 	glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	glfwSetCursorPosCallback(wnd, mouse_cb);
 	glfwSwapInterval(1);
 	glfwShowWindow(wnd);
 	t0 = glfwGetTime();
-	glUseProgram(prog);
+	glUseProgram(block_prog);
+	held_left = 0;
+	held_right = 0;
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
 		t1 = glfwGetTime();
@@ -575,6 +649,25 @@ int main(void) {
 		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && grounded) {
 			glm_vec3_muladds(up, 8.0F, player_vel);
 		}
+		find_block_ahead();
+		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_LEFT) 
+				== GLFW_PRESS) {
+			if (!held_left) {
+				add_block();
+				held_left = 1;
+			}
+		} else {
+			held_left = 0;
+		}
+		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_RIGHT) 
+				== GLFW_PRESS) {
+			if (!held_right) {
+				remove_block();
+				held_right = 1;
+			}
+		} else {
+			held_right = 0;
+		}
 		grounded = 0;
 		player_move();
 		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
@@ -587,9 +680,14 @@ int main(void) {
 		glm_vec3_add(eye, front, center);
 		glm_lookat(eye, center, up, view);
 		glm_mat4_mul(proj, view, world);
-		glUseProgram(prog);
+		create_vertices();
+		glUseProgram(block_prog);
 		glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) world);
 		glBindVertexArray(vao);
+		glBufferSubData(GL_ARRAY_BUFFER, 0,
+				nvertices * sizeof(*vertices), 
+				vertices);
+		glEnableVertexAttribArray(0);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
 		glUniform1i(tex_loc, 0);

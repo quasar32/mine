@@ -5,6 +5,7 @@
 #define Z(v) (((v) >> 10U) & 31U)
 #define U(v) (((v) >> 15U) & 31U)
 #define V(v) (((v) >> 20U) & 31U)
+#define L(v) (((v) >> 25U) &  1U)
 
 layout(location=0) in uint vert;
 
@@ -12,6 +13,7 @@ uniform mat4 world;
 
 out vec2 uv;
 out float dist;
+flat out uint select;
 
 void main() {
 	vec3 xyz;
@@ -21,4 +23,5 @@ void main() {
 	uv = vec2(U(vert), V(vert)) / 16.0F; 
 	gl_Position = world * xyzw; 
 	dist = gl_Position.w;
+	select = L(vert);
 }
