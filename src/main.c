@@ -25,6 +25,15 @@
 #define BOTTOM  16U
 #define TOP     32U
 
+#define VAO_MAP       0
+#define VAO_CROSSHAIR 1
+#define NUM_VAOS      2
+
+#define VBO_MAP       0
+#define VBO_CROSSHAIR 1
+#define EBO_CROSSHAIR 2
+#define NUM_BOS       3 
+
 #define FOR_XYZ_ALL \
 	for (x = 0; x < CHUNK_LEN; x++) \
 		for (y = 0; y < CHUNK_LEN; y++) \
@@ -100,6 +109,24 @@ static struct vertex cube[6][6] = {
 	}
 };
 
+static uint8_t crosshair_indices[] = {
+	0, 1, 2,
+	0, 2, 3,
+	4, 5, 6,
+	4, 6, 7,
+};
+
+static vec2 crosshair_vertices[] = {
+	{0.05F, 0.01F},
+	{-0.05F, 0.01F},
+	{-0.05F, -0.01F},
+	{0.05F, -0.01F},
+	{0.01F, 0.05F},
+	{-0.01F, 0.05F},
+	{-0.01F, -0.05F},
+	{0.01F, -0.05F},
+};
+
 static struct prism model_prism = { 
 	{-0.3F, 0.0F, -0.3F},
 	{0.3F, 1.8F, 0.3F} 
@@ -171,13 +198,15 @@ static char *read_all_str(const char *path) {
 	return buf;
 }
 
-static GLuint load_shader(GLenum type, const char *path) {
-	GLuint shader;
+static unsigned load_shader(GLenum type, const char *path) {
+	unsigned shader;
 	int status;
 	char log[1024];
 	const char *src;
+	char full[PATH_MAX];
 
-	src = read_all_str(path);
+	snprintf(full, PATH_MAX, "shader/%s", path);
+	src = read_all_str(full);
 	if (!src) {
 		die("load_shader: %s\n", strerror(errno));
 	}
@@ -193,17 +222,22 @@ static GLuint load_shader(GLenum type, const char *path) {
 	return shader;
 }
 
-static GLuint load_prog(GLuint vs, GLuint fs) {
-	GLuint prog;
+static unsigned load_prog(const char *vs_path, const char *fs_path) {
+	unsigned prog;
 	int status;
 	char buf[1024];
+	unsigned vs, fs;
 
+	vs = load_shader(GL_VERTEX_SHADER, vs_path);
+	fs = load_shader(GL_FRAGMENT_SHADER, fs_path);
 	prog = glCreateProgram();
 	glAttachShader(prog, vs);
 	glAttachShader(prog, fs);
 	glLinkProgram(prog);
 	glDetachShader(prog, vs);
 	glDetachShader(prog, fs);
+	glDeleteShader(vs);
+	glDeleteShader(fs);
 	glGetProgramiv(prog, GL_LINK_STATUS, &status);
 	if (!status) {
 		glGetProgramInfoLog(prog, sizeof(buf), NULL, buf);
@@ -413,8 +447,10 @@ static void get_player_prism(struct prism *prism) {
 static void get_moving_player_prism(struct prism *prism, int axis) {
 	get_player_prism(prism);
 	if (player_vel[axis] < 0.0F) {
+		prism->max[axis] = prism->min[axis];
 		prism->min[axis] += player_vel[axis] * dt;
 	} else {
+		prism->min[axis] = prism->max[axis];
 		prism->max[axis] += player_vel[axis] * dt;
 	}
 }
@@ -428,11 +464,11 @@ static void get_block_prism(struct prism *prism, ivec3 v) {
 	}
 }
 
-static void get_block_coord(vec3 v, ivec3 iv) {
+static void get_block_coord(vec3 src, ivec3 dst) {
 	int i;
 
 	for (i = 0; i < 3; i++) {
-		iv[i] = floorf(v[i] + 0.5F);
+		dst[i] = floorf(src[i] + 0.5F);
 	}
 }
 
@@ -502,10 +538,9 @@ static void find_block_ahead(void) {
 	int i;
 	vec3 v;
 
-	glm_vec3_copy(player_pos, v);
-	v[1] += 1.7F;
-	for (i = 0; i < 4; i++) {
-		glm_vec3_add(v, front, v);
+	glm_vec3_copy(eye, v);
+	for (i = 0; i < 16; i++) {
+		glm_vec3_muladds(front, 0.25F, v);
 		get_block_coord(v, pos_ahead);
 		block_ahead = map_get(pos_ahead);
 		if (block_ahead && *block_ahead) {
@@ -521,6 +556,7 @@ static void remove_block(void) {
 	}
 }
 
+#if 0
 static void add_block(void) {
 	ivec3 iv;
 	int dir;
@@ -547,17 +583,73 @@ static void add_block(void) {
 		*b = 1;
 	}
 }
+#endif
+
+static int eye_plane_in_prism(int i, float t, struct prism *prism) {
+	float face; 
+	face = eye[i] + front[i] * t;  
+	return (face >= prism->min[i] && face < prism->max[i]);
+}
+
+static void add_block(void) {
+	struct prism block_prism;
+	struct prism player_prism;
+	struct prism place_prism;
+	float t, min_t;
+	int i;
+	ivec3 iv, min_iv;
+	uint8_t *u;
+
+	if (!block_ahead) {
+		return;
+	}
+	min_t = INFINITY;
+	glm_ivec3_zero(min_iv);
+	get_block_prism(&block_prism, pos_ahead);
+	get_player_prism(&player_prism);
+	for (i = 0; i < 3; i++) {
+		glm_ivec3_copy(pos_ahead, iv);
+		if (front[i] < 0.0F) {
+			iv[i] += 1;
+			t = (block_prism.max[i] - eye[i]) / front[i];
+		} else if (front[i] > 0.0F) {
+			iv[i] -= 1;
+			t = (block_prism.min[i] - eye[i]) / front[i];
+		} else {
+			continue;
+		}
+		if (!eye_plane_in_prism((i + 1) % 3, t, &block_prism) ||
+		    !eye_plane_in_prism((i + 2) % 3, t, &block_prism)){
+			continue;
+		}
+		get_block_prism(&place_prism, iv);
+		if (prism_collide(&player_prism, &place_prism)) {
+			continue;
+		}
+		if (t < min_t) {
+			printf("%f ", t);
+			min_t = t;
+			glm_ivec3_copy(iv, min_iv);
+		}
+	}
+	if (min_t != INFINITY) {
+		u = map_get(min_iv);
+		if (u) {
+			*u = 1;
+		}
+	}
+	printf("\n");
+}
 
 int main(void) {
 	GLFWwindow *wnd;
-	GLuint block_vs, block_fs;
-	GLuint block_prog;
-	GLuint vao, vbo[2];
-	GLint world_loc;
-	GLint tex_loc;
+	unsigned block_prog, crosshair_prog;
+	unsigned vaos[NUM_VAOS], bos[NUM_BOS];
+	int world_loc;
+	int tex_loc;
 	mat4 proj, view, world;
 	stbi_uc *data;
-	GLuint tex;
+	unsigned tex;
 	int w, h, channels;
 	double t0, t1;
 	vec3 center;
@@ -598,22 +690,26 @@ int main(void) {
 	glGenerateMipmap(GL_TEXTURE_2D);
 	stbi_image_free(data);
 	data = NULL;
-	glGenVertexArrays(1, &vao);
-	glBindVertexArray(vao);
-	glGenBuffers(2, vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
+	glGenVertexArrays(NUM_VAOS, vaos);
+	glGenBuffers(NUM_BOS, bos);
+	glBindVertexArray(vaos[VAO_MAP]);
+	glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_MAP]);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
 			NULL, GL_DYNAMIC_DRAW);
 	glVertexAttribIPointer(0, 1, GL_UNSIGNED_INT, 4, NULL);
 	glEnableVertexAttribArray(0);
 	glBindVertexArray(0);
-	glEnable(GL_DEPTH_TEST);
-	glDepthFunc(GL_LESS);
-	glEnable(GL_CULL_FACE);
-	glCullFace(GL_BACK);
-	block_vs = load_shader(GL_VERTEX_SHADER, "shader/block.vert"); 
-	block_fs = load_shader(GL_FRAGMENT_SHADER, "shader/block.frag");
-	block_prog = load_prog(block_vs, block_fs);
+	glBindVertexArray(vaos[VAO_CROSSHAIR]);
+	glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_CROSSHAIR]);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(crosshair_vertices), 
+			crosshair_vertices, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, NULL);
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[EBO_CROSSHAIR]);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(crosshair_indices),
+			crosshair_indices, GL_STATIC_DRAW);
+	block_prog = load_prog("map.vert", "map.frag");
+	crosshair_prog = load_prog("crosshair.vert", "crosshair.frag");
 	world_loc = glGetUniformLocation(block_prog, "world");
 	tex_loc = glGetUniformLocation(block_prog, "tex");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
@@ -623,6 +719,9 @@ int main(void) {
 	glfwShowWindow(wnd);
 	t0 = glfwGetTime();
 	glUseProgram(block_prog);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glUniform1i(tex_loc, 0);
 	held_left = 0;
 	held_right = 0;
 	while (!glfwWindowShouldClose(wnd)) {
@@ -649,6 +748,8 @@ int main(void) {
 		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && grounded) {
 			glm_vec3_muladds(up, 8.0F, player_vel);
 		}
+		glm_vec3_copy(player_pos, eye);
+		eye[1] += 1.7F;
 		find_block_ahead();
 		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_LEFT) 
 				== GLFW_PRESS) {
@@ -671,8 +772,6 @@ int main(void) {
 		grounded = 0;
 		player_move();
 		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
-		glm_vec3_copy(player_pos, eye);
-		eye[1] += 1.7F;
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
 		glm_perspective(GLM_PI_4f, width / (float) height, 
@@ -681,17 +780,23 @@ int main(void) {
 		glm_lookat(eye, center, up, view);
 		glm_mat4_mul(proj, view, world);
 		create_vertices();
+		glEnable(GL_DEPTH_TEST);
+		glEnable(GL_CULL_FACE);
+		glDepthFunc(GL_LESS);
+		glCullFace(GL_BACK);
 		glUseProgram(block_prog);
 		glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) world);
-		glBindVertexArray(vao);
+		glBindVertexArray(vaos[VAO_MAP]);
+		glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_MAP]);
 		glBufferSubData(GL_ARRAY_BUFFER, 0,
 				nvertices * sizeof(*vertices), 
 				vertices);
-		glEnableVertexAttribArray(0);
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, tex);
-		glUniform1i(tex_loc, 0);
 		glDrawArrays(GL_TRIANGLES, 0, nvertices);
+		glDisable(GL_DEPTH_TEST);
+		glDisable(GL_CULL_FACE);
+		glUseProgram(crosshair_prog);
+		glBindVertexArray(vaos[VAO_CROSSHAIR]);
+		glDrawElements(GL_TRIANGLES, 12, GL_UNSIGNED_BYTE, NULL); 
 		glfwSwapBuffers(wnd);
 	}
 	return EXIT_SUCCESS;
