@@ -117,14 +117,14 @@ static uint8_t crosshair_indices[] = {
 };
 
 static vec2 crosshair_vertices[] = {
-	{0.05F, 0.01F},
-	{-0.05F, 0.01F},
-	{-0.05F, -0.01F},
-	{0.05F, -0.01F},
-	{0.01F, 0.05F},
-	{-0.01F, 0.05F},
-	{-0.01F, -0.05F},
-	{0.01F, -0.05F},
+	{0.05F, 0.005F},
+	{-0.05F, 0.005F},
+	{-0.05F, -0.005F},
+	{0.05F, -0.005F},
+	{0.005F, 0.05F},
+	{-0.005F, 0.05F},
+	{-0.005F, -0.05F},
+	{0.005F, -0.05F},
 };
 
 static struct prism model_prism = { 
@@ -152,9 +152,9 @@ static vec3 right;
 
 static float dt;
 
-static ivec3 pos_selected;
-static uint8_t *block_selected;
-static int axis_selected;
+static ivec3 pos_itc;
+static uint8_t *block_itc;
+static int axis_itc;
 
 [[noreturn]]
 static void die(const char *fmt, ...) {
@@ -360,7 +360,7 @@ static void add_vertex(int x, int y, int z) {
 				v->z = z + cube[i][j].z;
 				v->u = blocks[*b][i] + cube[i][j].u; 
 				v->v = cube[i][j].v;
-				v->l = (b == block_selected);
+				v->l = (b == block_itc);
 			}
 		}
 	}
@@ -450,7 +450,7 @@ static void get_moving_player_prism(struct prism *prism, int axis) {
 	if (player_vel[axis] < 0.0F) {
 		prism->max[axis] = prism->min[axis];
 		prism->min[axis] += player_vel[axis] * dt;
-	} else if (player_vel[axis] > 0.0F) {
+	} else {
 		prism->min[axis] = prism->max[axis];
 		prism->max[axis] += player_vel[axis] * dt;
 	}
@@ -502,11 +502,9 @@ static void axis_move(int axis) {
 	float new, tmp;
 	float vel;
 
-#if 0
 	if (fabsf(player_vel[axis]) < 1e-5F) {
 		return;
 	}
-#endif
 	vel = player_vel[axis];
 	get_moving_player_prism(&player_prism, axis);
 	get_detect_bounds(&player_prism, min, max);
@@ -554,125 +552,75 @@ static int vec3_min_idx(vec3 v) {
 	return min;
 }
 
-static void find_block_selected(void) {
+static void find_block_itc(void) {
 	vec3 delta;
-	ivec3 ipos;
 	ivec3 step;
 	vec3 disp;
 	int i;
-	uint8_t *u;
+	vec3 v;
 
-	get_block_coord(eye, ipos);
+	get_block_coord(eye, pos_itc);
 	for (i = 0; i < 3; i++) {
 		delta[i] = fabsf(1.0F / front[i]);
 		if (front[i] < 0.0F) {
 			step[i] = -1;
-			disp[i] = (eye[i] - ipos[i] + 0.5F) * delta[i];
+			disp[i] = eye[i] - pos_itc[i];
 		} else {
 			step[i] = 1;
-			disp[i] = (ipos[i] - eye[i] + 0.5F) * delta[i];
+			disp[i] = pos_itc[i] - eye[i];
 		}
+		disp[i] = (disp[i] + 0.5F) * delta[i];
 	}
-	do {
-		i = vec3_min_idx(disp);
-		disp[i] += delta[i]; 
-		ipos[i] += step[i];
-		u = map_get(ipos);
-	} while (u && !*u);
-	block_selected = u && *u ? u : NULL;
-	axis_selected = i;
-	glm_ivec3_copy(ipos, pos_selected);
+	for (i = 0; i < 9; i++) {
+		axis_itc = vec3_min_idx(disp);
+		disp[axis_itc] += delta[axis_itc]; 
+		pos_itc[axis_itc] += step[axis_itc];
+		block_itc = map_get(pos_itc);
+		if (!block_itc) {
+			return;
+		}
+		if (*block_itc) {
+			break;
+		}
+	} 
+	for (i = 0; i < 3; i++) {
+		v[i] = pos_itc[i];
+	}
+	if (glm_vec3_distance2(v, eye) > 25.0F) {
+		block_itc = NULL;
+	}
 }
 
 static void remove_block(void) {
-	if (block_selected) {
-		*block_selected = 0;
+	if (block_itc) {
+		*block_itc = 0;
 	}
-}
-
-#if 0
-static void add_block(void) {
-	ivec3 iv;
-	int dir;
-	uint8_t *b;
-
-	glm_ivec3_copy(pos_selected, iv);
-	dir = (unsigned) roundf(yaw / GLM_PI_2f) & 3U;
-	switch (dir) {
-	case 0:
-		--iv[0];
-		break;
-	case 1:
-		--iv[2];
-		break;
-	case 2:
-		++iv[0];
-		break;
-	case 3:
-		++iv[2];
-		break;
-	}
-	b = map_get(iv);
-	if (b) {
-		*b = 1;
-	}
-}
-#endif
-
-static int eye_plane_in_prism(int i, float t, struct prism *prism) {
-	float face; 
-	face = eye[i] + front[i] * t;  
-	return (face >= prism->min[i] && face < prism->max[i]);
 }
 
 static void add_block(void) {
-	struct prism block_prism;
+	ivec3 place_pos;
 	struct prism player_prism;
-	struct prism place_prism;
-	float t, min_t;
-	int i;
-	ivec3 iv, min_iv;
-	uint8_t *u;
+	struct prism block_prism;
+	uint8_t *block;
 
-	if (!block_selected) {
+	if (!block_itc) {
 		return;
 	}
-	min_t = INFINITY;
-	glm_ivec3_zero(min_iv);
-	get_block_prism(&block_prism, pos_selected);
+	glm_ivec3_copy(pos_itc, place_pos);
+	if (front[axis_itc] < 0.0F) {
+		place_pos[axis_itc] += 1; 
+	} else {
+		place_pos[axis_itc] -= 1; 
+	}
 	get_player_prism(&player_prism);
-	for (i = 0; i < 3; i++) {
-		glm_ivec3_copy(pos_selected, iv);
-		if (front[i] < 0.0F) {
-			iv[i] += 1;
-			t = (block_prism.max[i] - eye[i]) / front[i];
-		} else if (front[i] > 0.0F) {
-			iv[i] -= 1;
-			t = (block_prism.min[i] - eye[i]) / front[i];
-		} else {
-			continue;
-		}
-		if (!eye_plane_in_prism((i + 1) % 3, t, &block_prism) ||
-		    !eye_plane_in_prism((i + 2) % 3, t, &block_prism)){
-			continue;
-		}
-		get_block_prism(&place_prism, iv);
-		if (prism_collide(&player_prism, &place_prism)) {
-			continue;
-		}
-		if (t < min_t) {
-			printf("%f ", t);
-			min_t = t;
-			glm_ivec3_copy(iv, min_iv);
-		}
+	get_block_prism(&block_prism, place_pos);
+	if (prism_collide(&player_prism, &block_prism)) {
+		return;
 	}
-	if (min_t != INFINITY) {
-		u = map_get(min_iv);
-		if (u) {
-			*u = 1;
-		}
+	block = map_get(place_pos);
+	if (block) {
+		*block = 1;
 	}
-	printf("\n");
 }
 
 int main(void) {
@@ -782,9 +730,12 @@ int main(void) {
 		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && grounded) {
 			glm_vec3_muladds(up, 8.0F, player_vel);
 		}
+		grounded = 0;
+		player_move();
+		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
 		glm_vec3_copy(player_pos, eye);
 		eye[1] += 1.7F;
-		find_block_selected();
+		find_block_itc();
 		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_LEFT) 
 				== GLFW_PRESS) {
 			if (!held_left) {
@@ -803,9 +754,6 @@ int main(void) {
 		} else {
 			held_right = 0;
 		}
-		grounded = 0;
-		player_move();
-		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
 		glm_perspective(GLM_PI_4f, width / (float) height, 
