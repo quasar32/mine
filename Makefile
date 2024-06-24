@@ -15,7 +15,7 @@ lib/glfw/src/libglfw3.a: lib/glfw/Makefile
 	make -C lib/glfw
 
 lib/glfw/Makefile:
-	cmake lib/glfw
+	cd lib/glfw && cmake . 
 
 clean:
 	make -C lib/glfw clean 
