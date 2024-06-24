@@ -629,6 +629,7 @@ int main(void) {
 	unsigned vaos[NUM_VAOS], bos[NUM_BOS];
 	int world_loc;
 	int tex_loc;
+	int proj_loc;
 	mat4 proj, view, world;
 	stbi_uc *data;
 	unsigned tex;
@@ -636,6 +637,7 @@ int main(void) {
 	double t0, t1;
 	vec3 center;
 	int held_left, held_right;
+	vec3 aspect;
 
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
@@ -694,6 +696,7 @@ int main(void) {
 	crosshair_prog = load_prog("crosshair.vert", "crosshair.frag");
 	world_loc = glGetUniformLocation(block_prog, "world");
 	tex_loc = glGetUniformLocation(block_prog, "tex");
+	proj_loc = glGetUniformLocation(crosshair_prog, "proj");
 	glfwSetFramebufferSizeCallback(wnd, resize_cb);
 	glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	glfwSetCursorPosCallback(wnd, mouse_cb);
@@ -778,6 +781,11 @@ int main(void) {
 		glDisable(GL_CULL_FACE);
 		glUseProgram(crosshair_prog);
 		glBindVertexArray(vaos[VAO_CROSSHAIR]);
+		aspect[0] = (float) height / width;
+		aspect[1] = 1.0F;
+		aspect[2] = 1.0F;
+		glm_scale_make(proj, aspect);
+		glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *) proj);
 		glDrawElements(GL_TRIANGLES, 12, GL_UNSIGNED_BYTE, NULL); 
 		glfwSwapBuffers(wnd);
 	}
