@@ -16,14 +16,23 @@
 #define SENSITIVITY 0.1F
 
 #define CHUNK_LEN 16 
-#define MAX_VERTICES (36 * CHUNK_LEN * CHUNK_LEN * CHUNK_LEN) 
+#define MAX_BLOCKS (CHUNK_LEN * CHUNK_LEN * CHUNK_LEN)
+#define MAX_QUEUE (MAX_BLOCKS * 1000)
+#define MAX_VERTICES (36 * MAX_BLOCKS) 
 
-#define LEFT     1U
-#define RIGHT    2U
-#define BACK     4U
-#define FRONT    8U
-#define BOTTOM  16U
-#define TOP     32U
+#define DIR_LEFT   0
+#define DIR_RIGHT  1
+#define DIR_BOTTOM 2
+#define DIR_TOP    3
+#define DIR_BACK   4
+#define DIR_FRONT  5
+
+#define FLAG_LEFT     1U
+#define FLAG_RIGHT    2U
+#define FLAG_BOTTOM   4U
+#define FLAG_TOP      8U
+#define FLAG_BACK    16U
+#define FLAG_FRONT   32U
 
 #define VAO_MAP       0
 #define VAO_CROSSHAIR 1
@@ -44,13 +53,16 @@
 		for (pos[1] = min[1]; pos[1] < max[1]; pos[1]++) \
 			for (pos[2] = min[2]; pos[2] < max[2]; pos[2]++) 
 
+#define IV3_IDX(a, v) (a[(v)[0]][(v)[1]][(v)[2]])
+
 struct vertex {
 	uint32_t x : 5;
 	uint32_t y : 5;
 	uint32_t z : 5;
-	uint32_t u : 5;
-	uint32_t v : 5;
-	uint32_t l : 1;
+	uint32_t u : 4;
+	uint32_t v : 4;
+	uint32_t l : 4;
+	uint32_t f : 4;
 };
 
 struct prism {
@@ -76,6 +88,22 @@ static struct vertex cube[6][6] = {
 		{1, 1, 1, 1, 0},
 	},
 	{
+		{1, 0, 1, 0, 0},
+		{0, 0, 1, 1, 0},
+		{0, 0, 0, 1, 1},
+		{0, 0, 0, 1, 1},
+		{1, 0, 0, 0, 1},
+		{1, 0, 1, 0, 0},
+	},
+	{
+		{1, 1, 1, 0, 1},
+		{1, 1, 0, 0, 0},
+		{0, 1, 0, 1, 0},
+		{0, 1, 0, 1, 0},
+		{0, 1, 1, 1, 1},
+		{1, 1, 1, 0, 1},
+	},
+	{
 		{1, 1, 0, 1, 0},
 		{1, 0, 0, 1, 1},
 		{0, 0, 0, 0, 1},
@@ -91,22 +119,6 @@ static struct vertex cube[6][6] = {
 		{1, 0, 1, 0, 1},
 		{1, 1, 1, 0, 0},
 	},
-	{
-		{1, 0, 1, 0, 0},
-		{0, 0, 1, 1, 0},
-		{0, 0, 0, 1, 1},
-		{0, 0, 0, 1, 1},
-		{1, 0, 0, 0, 1},
-		{1, 0, 1, 0, 0},
-	},
-	{
-		{1, 1, 1, 0, 1},
-		{1, 1, 0, 0, 0},
-		{0, 1, 0, 1, 0},
-		{0, 1, 0, 1, 0},
-		{0, 1, 1, 1, 1},
-		{1, 1, 1, 0, 1},
-	}
 };
 
 static uint8_t crosshair_indices[] = {
@@ -138,6 +150,7 @@ static int grounded;
 
 static uint8_t map[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
 static uint8_t faces[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
+static uint8_t lights[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN][6];
 static struct vertex vertices[MAX_VERTICES];
 static int nvertices;
 
@@ -226,7 +239,7 @@ static unsigned load_shader(GLenum type, const char *path) {
 static unsigned load_prog(const char *vs_path, const char *fs_path) {
 	unsigned prog;
 	int status;
-	char buf[1024];
+	char log[1024];
 	unsigned vs, fs;
 
 	vs = load_shader(GL_VERTEX_SHADER, vs_path);
@@ -241,8 +254,8 @@ static unsigned load_prog(const char *vs_path, const char *fs_path) {
 	glDeleteShader(fs);
 	glGetProgramiv(prog, GL_LINK_STATUS, &status);
 	if (!status) {
-		glGetProgramInfoLog(prog, sizeof(buf), NULL, buf);
-		die("load_prog: %s\n", buf);
+		glGetProgramInfoLog(prog, sizeof(log), NULL, log);
+		die("load_prog: %s\n", log);
 	}
 	return prog;
 }
@@ -342,7 +355,11 @@ enum block : uint8_t {
 
 static uint8_t blocks[][6] = {
 	{},
-	{2, 2, 2, 2, 0, 1},
+	{2, 2, 0, 1, 2, 2},
+};
+
+static int light_factors[6] = {
+	8, 8, 5, 10, 6, 6
 };
 
 static void add_vertex(int x, int y, int z) {
@@ -360,7 +377,8 @@ static void add_vertex(int x, int y, int z) {
 				v->z = z + cube[i][j].z;
 				v->u = blocks[*b][i] + cube[i][j].u; 
 				v->v = cube[i][j].v;
-				v->l = (b == block_itc);
+				v->l = lights[x][y][z][i];
+				v->f = light_factors[i]; 
 			}
 		}
 	}
@@ -372,10 +390,93 @@ static void create_map(void) {
 	for (x = 0; x < CHUNK_LEN; x++) {
 		for (z = 0; z < CHUNK_LEN; z++) {
 			map[x][0][z] = 1;
-			if (rand() % 16 == 0) {
-				map[x][1][z] = 1;
-			}
 		}
+	}
+}
+
+static int inbounds(ivec3 v) {
+	int i;
+	
+	for (i = 0; i < 3; i++) {
+		if (v[i] < 0 || v[i] >= CHUNK_LEN) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static uint8_t *map_get(ivec3 v) {
+	return inbounds(v) ? &map[v[0]][v[1]][v[2]] : NULL;
+}
+
+struct light_node {
+	ivec3 v;
+	int l;
+};
+
+static struct light_node queue[MAX_QUEUE];
+static int head;
+static int tail;
+static int nqueue;
+
+static void enqueue(struct light_node *old) {
+	struct light_node *new;
+	int dir;
+	uint8_t *l;
+
+	for (dir = 0; dir < 6; dir++) {
+		if (nqueue == MAX_QUEUE) {
+			die("queue oom\n");
+		}
+		new = queue + tail;
+		*new = *old;
+		new->v[dir / 2] += dir % 2 ? -1 : 1;
+		if (!inbounds(new->v)) {
+			continue;
+		}
+		l = &IV3_IDX(lights, new->v)[dir];
+		if (*l >= new->l) {
+			continue;
+		}
+		IV3_IDX(lights, new->v)[dir] = new->l;
+		if (IV3_IDX(map, new->v)) {
+			continue;
+		}
+		if (new->l == 1) {
+			continue;
+		}
+		if (dir != DIR_TOP) {
+			new->l--;
+		}
+		tail = (tail + 1) % MAX_QUEUE;
+		nqueue++;
+	}
+}
+
+static void dequeue(struct light_node *n) {
+	*n = queue[head];
+	head = (head + 1) % MAX_QUEUE;
+	nqueue--;
+}
+
+static void flood(void) {
+	int x, z;
+	struct light_node q;
+
+	memset(lights, 0, sizeof(lights));
+	nqueue = 0;
+	for (x = 0; x < CHUNK_LEN; x++) {
+		for (z = 0; z < CHUNK_LEN; z++) {
+			q.v[0] = x;
+			q.v[1] = CHUNK_LEN;
+			q.v[2] = z;
+			q.l = 15;
+			enqueue(&q);
+		}
+	}
+	while (nqueue) {
+		dequeue(&q);
+		enqueue(&q);
 	}
 }
 
@@ -387,29 +488,31 @@ static void create_vertices(void) {
 		if (!map[x][y][z]) {
 			continue;
 		}
-		faces[x][y][z] = FRONT | RIGHT | TOP; 
+		faces[x][y][z] = FLAG_FRONT | FLAG_RIGHT | FLAG_TOP; 
 		if (x == 0) {
-			faces[x][y][z] |= LEFT;
+			faces[x][y][z] |= FLAG_LEFT;
 		} else if (map[x - 1][y][z]) {
-			faces[x - 1][y][z] &= ~RIGHT;
+			faces[x - 1][y][z] &= ~FLAG_RIGHT;
 		} else {
-			faces[x][y][z] |= LEFT;
+			faces[x][y][z] |= FLAG_LEFT;
 		}
 		if (y == 0) {
-			faces[x][y][z] |= BOTTOM;
+			faces[x][y][z] |= FLAG_BOTTOM;
 		} else if (map[x][y - 1][z]) {
-			faces[x][y - 1][z] &= ~TOP;
+			faces[x][y - 1][z] &= ~FLAG_TOP;
 		} else {
-			faces[x][y][z] |= BOTTOM;
+			faces[x][y][z] |= FLAG_BOTTOM;
 		}
 		if (z == 0) {
-			faces[x][y][z] |= BACK;
+			faces[x][y][z] |= FLAG_BACK;
 		} else if (map[x][y][z - 1]) {
-			faces[x][y][z - 1] &= ~FRONT;
+			faces[x][y][z - 1] &= ~FLAG_FRONT;
 		} else {
-			faces[x][y][z] |= BACK;
+			faces[x][y][z] |= FLAG_BACK;
 		}
 	}
+
+	flood();
 
 	FOR_XYZ_ALL {
 		if (map[x][y][z]) {
@@ -471,17 +574,6 @@ static void get_block_coord(vec3 src, ivec3 dst) {
 	for (i = 0; i < 3; i++) {
 		dst[i] = floorf(src[i] + 0.5F);
 	}
-}
-
-static uint8_t *map_get(ivec3 v) {
-	int i;
-	
-	for (i = 0; i < 3; i++) {
-		if (v[i] < 0 || v[i] >= CHUNK_LEN) {
-			return NULL;
-		}
-	}
-	return &map[v[0]][v[1]][v[2]];
 }
 
 static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {

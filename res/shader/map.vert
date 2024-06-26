@@ -3,9 +3,10 @@
 #define X(v) (((v)       ) & 31U)
 #define Y(v) (((v) >>  5U) & 31U)
 #define Z(v) (((v) >> 10U) & 31U)
-#define U(v) (((v) >> 15U) & 31U)
-#define V(v) (((v) >> 20U) & 31U)
-#define L(v) (((v) >> 25U) &  1U)
+#define U(v) (((v) >> 15U) & 15U)
+#define V(v) (((v) >> 19U) & 15U)
+#define L(v) (((v) >> 23U) & 15U)
+#define F(v) (((v) >> 27U) & 15U)
 
 layout(location=0) in uint vert;
 
@@ -13,7 +14,7 @@ uniform mat4 world;
 
 out vec2 uv;
 out float dist;
-flat out uint select;
+out float light;
 
 void main() {
 	vec3 xyz;
@@ -23,5 +24,5 @@ void main() {
 	uv = vec2(U(vert), V(vert)) / 16.0F; 
 	gl_Position = world * xyzw; 
 	dist = gl_Position.w;
-	select = L(vert);
+	light = L(vert) * F(vert) / 150.0F;
 }
