@@ -1,12 +1,11 @@
 #version 330
 
-#define X(v) (((v)       ) & 31U)
-#define Y(v) (((v) >>  5U) & 31U)
-#define Z(v) (((v) >> 10U) & 31U)
-#define U(v) (((v) >> 15U) & 15U)
-#define V(v) (((v) >> 19U) & 15U)
-#define L(v) (((v) >> 23U) & 15U)
-#define F(v) (((v) >> 27U) & 15U)
+#define X(v) (((v)       ) &  31U)
+#define Y(v) (((v) >>  5U) &  31U)
+#define Z(v) (((v) >> 10U) &  31U)
+#define U(v) (((v) >> 15U) &  15U)
+#define V(v) (((v) >> 19U) &  15U)
+#define L(v) (((v) >> 23U) & 255U)
 
 layout(location=0) in uint vert;
 
@@ -24,5 +23,6 @@ void main() {
 	uv = vec2(U(vert), V(vert)) / 16.0F; 
 	gl_Position = world * xyzw; 
 	dist = gl_Position.w;
-	light = L(vert) * F(vert) / 150.0F;
+	light = (L(vert) + 10.0F) / 160.0F;
+	//light = pow(light, 1.0F / 2.2F);
 }

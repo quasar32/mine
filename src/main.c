@@ -17,22 +17,22 @@
 
 #define CHUNK_LEN 16 
 #define MAX_BLOCKS (CHUNK_LEN * CHUNK_LEN * CHUNK_LEN)
-#define MAX_QUEUE (MAX_BLOCKS * 1000)
+#define MAX_QUEUE (MAX_BLOCKS)
 #define MAX_VERTICES (36 * MAX_BLOCKS) 
 
-#define DIR_LEFT   0
-#define DIR_RIGHT  1
-#define DIR_BOTTOM 2
-#define DIR_TOP    3
-#define DIR_BACK   4
-#define DIR_FRONT  5
+#define NEG_X 0
+#define POS_X 1
+#define NEG_Y 2
+#define POS_Y 3
+#define NEG_Z 4
+#define POS_Z 5
 
-#define FLAG_LEFT     1U
-#define FLAG_RIGHT    2U
-#define FLAG_BOTTOM   4U
-#define FLAG_TOP      8U
-#define FLAG_BACK    16U
-#define FLAG_FRONT   32U
+#define LEFT     1U
+#define RIGHT    2U
+#define BOTTOM   4U
+#define TOP      8U
+#define BACK    16U
+#define FRONT   32U
 
 #define VAO_MAP       0
 #define VAO_CROSSHAIR 1
@@ -61,13 +61,17 @@ struct vertex {
 	uint32_t z : 5;
 	uint32_t u : 4;
 	uint32_t v : 4;
-	uint32_t l : 4;
-	uint32_t f : 4;
+	uint32_t l : 8;
 };
 
 struct prism {
 	vec3 min;
 	vec3 max;
+};
+
+struct light_node {
+	ivec3 v;
+	int l;
 };
 
 static struct vertex cube[6][6] = {
@@ -144,7 +148,21 @@ static struct prism model_prism = {
 	{0.3F, 1.8F, 0.3F} 
 };
 
-static vec3 player_pos = {2.0F, 0.5F, 2.0F};
+#define AIR   0
+#define DIRT  1
+#define GRASS 2
+
+static uint8_t blocks[][6] = {
+	{},
+	{0, 0, 0, 0, 0, 0},
+	{2, 2, 0, 1, 2, 2},
+};
+
+static uint8_t light_factors[6] = {
+	8, 8, 5, 10, 6, 6
+};
+
+static vec3 player_pos;
 static vec3 player_vel;
 static int grounded;
 
@@ -168,6 +186,14 @@ static float dt;
 static ivec3 pos_itc;
 static uint8_t *block_itc;
 static int axis_itc;
+
+static struct light_node queue[MAX_QUEUE];
+static int head;
+static int tail;
+static int nqueue;
+
+static float yaw; 
+static float pitch;
 
 [[noreturn]]
 static void die(const char *fmt, ...) {
@@ -313,9 +339,6 @@ static float clamp(float v, float l, float h) {
 	return fminf(fmaxf(v, l), h);
 }
 
-static float yaw = -GLM_PI_2f; 
-static float pitch;
-
 static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	static int first;
 	static double last_x;
@@ -338,32 +361,20 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	pitch += off_y;
 	yaw = fmodf(yaw, GLM_PIf * 2.0F);
 	pitch = clamp(pitch, MIN_PITCH, MAX_PITCH);
+}
+
+static void update_cam_dirs(void) {
 	front[0] = cosf(yaw) * cosf(pitch);
 	front[1] = sinf(pitch);
 	front[2] = sinf(yaw) * cosf(pitch);
-	glm_normalize(front);
 	forw[0] = cosf(yaw);
 	forw[1] = 0.0F;
 	forw[2] = sinf(yaw);
-	glm_normalize(forw);
+	glm_cross(forw, up, right);
 }
 
-enum block : uint8_t {
-	AIR,
-	GRAVEL,
-};
-
-static uint8_t blocks[][6] = {
-	{},
-	{2, 2, 0, 1, 2, 2},
-};
-
-static int light_factors[6] = {
-	8, 8, 5, 10, 6, 6
-};
-
 static void add_vertex(int x, int y, int z) {
-	struct vertex *v;
+	struct vertex c, *v;
 	int i, j;
 	uint8_t *b;
 
@@ -372,13 +383,15 @@ static void add_vertex(int x, int y, int z) {
 		if ((faces[x][y][z] >> i) & 1) {
 			for (j = 0; j < 6; j++) {
 				v = &vertices[nvertices++];
-				v->x = x + cube[i][j].x;
-				v->y = y + cube[i][j].y;
-				v->z = z + cube[i][j].z;
-				v->u = blocks[*b][i] + cube[i][j].u; 
-				v->v = cube[i][j].v;
-				v->l = lights[x][y][z][i];
-				v->f = light_factors[i]; 
+				c = cube[i][j];
+				v->x = x + c.x;
+				v->y = y + c.y;
+				v->z = z + c.z;
+				v->u = blocks[*b][i] + c.u; 
+				v->v = c.v;
+				v->l = lights[x][y][z][i] *
+				       (light_factors[i] + 
+				       (b == block_itc) * 2); 
 			}
 		}
 	}
@@ -389,7 +402,8 @@ static void create_map(void) {
 
 	for (x = 0; x < CHUNK_LEN; x++) {
 		for (z = 0; z < CHUNK_LEN; z++) {
-			map[x][0][z] = 1;
+			map[x][0][z] = DIRT;
+			map[x][1][z] = GRASS;
 		}
 	}
 }
@@ -409,44 +423,34 @@ static uint8_t *map_get(ivec3 v) {
 	return inbounds(v) ? &map[v[0]][v[1]][v[2]] : NULL;
 }
 
-struct light_node {
-	ivec3 v;
-	int l;
-};
-
-static struct light_node queue[MAX_QUEUE];
-static int head;
-static int tail;
-static int nqueue;
-
 static void enqueue(struct light_node *old) {
 	struct light_node *new;
-	int dir;
-	uint8_t *l;
+	int face;
+	uint8_t *light;
 
-	for (dir = 0; dir < 6; dir++) {
+	for (face = 0; face < 6; face++) {
 		if (nqueue == MAX_QUEUE) {
 			die("queue oom\n");
 		}
 		new = queue + tail;
 		*new = *old;
-		new->v[dir / 2] += dir % 2 ? -1 : 1;
+		new->v[face / 2] += face % 2 ? -1 : 1;
 		if (!inbounds(new->v)) {
 			continue;
 		}
-		l = &IV3_IDX(lights, new->v)[dir];
-		if (*l >= new->l) {
+		light = &IV3_IDX(lights, new->v)[face];
+		if (*light >= new->l) {
 			continue;
 		}
-		IV3_IDX(lights, new->v)[dir] = new->l;
+		*light = new->l;
 		if (IV3_IDX(map, new->v)) {
 			continue;
 		}
-		if (new->l == 1) {
-			continue;
-		}
-		if (dir != DIR_TOP) {
+		if (face != POS_Y) {
 			new->l--;
+		}
+		if (new->l == 0) {
+			continue;
 		}
 		tail = (tail + 1) % MAX_QUEUE;
 		nqueue++;
@@ -483,37 +487,37 @@ static void flood(void) {
 static void create_vertices(void) {
 	int x, y, z;
 
-	nvertices = 0;
 	FOR_XYZ_ALL {
 		if (!map[x][y][z]) {
 			continue;
 		}
-		faces[x][y][z] = FLAG_FRONT | FLAG_RIGHT | FLAG_TOP; 
+		faces[x][y][z] = FRONT | RIGHT | TOP; 
 		if (x == 0) {
-			faces[x][y][z] |= FLAG_LEFT;
+			faces[x][y][z] |= LEFT;
 		} else if (map[x - 1][y][z]) {
-			faces[x - 1][y][z] &= ~FLAG_RIGHT;
+			faces[x - 1][y][z] &= ~RIGHT;
 		} else {
-			faces[x][y][z] |= FLAG_LEFT;
+			faces[x][y][z] |= LEFT;
 		}
 		if (y == 0) {
-			faces[x][y][z] |= FLAG_BOTTOM;
+			faces[x][y][z] |= BOTTOM;
 		} else if (map[x][y - 1][z]) {
-			faces[x][y - 1][z] &= ~FLAG_TOP;
+			faces[x][y - 1][z] &= ~TOP;
 		} else {
-			faces[x][y][z] |= FLAG_BOTTOM;
+			faces[x][y][z] |= BOTTOM;
 		}
 		if (z == 0) {
-			faces[x][y][z] |= FLAG_BACK;
+			faces[x][y][z] |= BACK;
 		} else if (map[x][y][z - 1]) {
-			faces[x][y][z - 1] &= ~FLAG_FRONT;
+			faces[x][y][z - 1] &= ~FRONT;
 		} else {
-			faces[x][y][z] |= FLAG_BACK;
+			faces[x][y][z] |= BACK;
 		}
 	}
 
 	flood();
 
+	nvertices = 0;
 	FOR_XYZ_ALL {
 		if (map[x][y][z]) {
 			add_vertex(x, y, z);
@@ -700,9 +704,9 @@ static void add_block(void) {
 	}
 	glm_ivec3_copy(pos_itc, place_pos);
 	if (front[axis_itc] < 0.0F) {
-		place_pos[axis_itc] += 1; 
+		place_pos[axis_itc]++; 
 	} else {
-		place_pos[axis_itc] -= 1; 
+		place_pos[axis_itc]--; 
 	}
 	get_player_prism(&player_prism);
 	get_block_prism(&block_prism, place_pos);
@@ -806,8 +810,7 @@ int main(void) {
 		t1 = glfwGetTime();
 		dt = clamp(t1 - t0, 0.0001F, 1000.0F);
 		t0 = t1;
-		glm_cross(forw, up, right);
-		glm_normalize(right);
+		update_cam_dirs();
 		player_vel[0] = 0.0F;
 		player_vel[2] = 0.0F;
 		if (glfwGetKey(wnd, GLFW_KEY_W)) {
