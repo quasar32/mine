@@ -1,4 +1,5 @@
 #include <cglm/cglm.h>
+#include <cglm/struct.h>
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <errno.h>
@@ -884,10 +885,12 @@ static void hotbar_add(void) {
 
 static void add_block(void) {
 	ivec3 place_pos;
-	struct prism player_prism;
+	struct prism obj_prism;
 	struct prism block_prism;
 	uint8_t *block;
 	struct hotbar_slot *slot;
+	int i;
+	struct object *obj;
 
 	if (!block_itc) {
 		return;
@@ -898,17 +901,33 @@ static void add_block(void) {
 	} else {
 		place_pos[axis_itc]--; 
 	}
-	get_world_prism(&player_prism, &player);
-	get_block_prism(&block_prism, place_pos);
-	if (prism_collide(&player_prism, &block_prism)) {
+	block = map_get(place_pos);
+	if (!block) {
 		return;
 	}
-	block = map_get(place_pos);
-	if (block) {
-		slot = hotbar_slots + hotbar_sel;
-		if (slot->n) {
-			*block = slot->id; 
-			slot->n--;
+	get_block_prism(&block_prism, place_pos);
+	get_world_prism(&obj_prism, &player);
+	if (prism_collide(&obj_prism, &block_prism)) {
+		return;
+	}
+	slot = hotbar_slots + hotbar_sel;
+	if (!slot->n) {
+		return;
+	}
+	*block = slot->id; 
+	slot->n--;
+	for (i = 0; i < num_items; i++) {
+		obj = items + i;
+		get_world_prism(&obj_prism, obj);
+		if (prism_collide(&obj_prism, &block_prism)) {
+			block = map_get(place_pos);
+			if (!block || !*block) {
+				if (front[axis_itc] < 0.0F) {
+					obj->pos[axis_itc]++;
+				} else {
+					obj->pos[axis_itc]--;
+				}
+			} 
 		}
 	}
 }
@@ -988,8 +1007,7 @@ int main(void) {
 	glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_CROSSHAIR]);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(crosshair_vertices), 
 			crosshair_vertices, GL_STATIC_DRAW);
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, NULL);
-	glEnableVertexAttribArray(0);
+	enable_attrib(0, 2, sizeof(vec2), 0);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[EBO_CROSSHAIR]);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(crosshair_indices),
 			crosshair_indices, GL_STATIC_DRAW);
