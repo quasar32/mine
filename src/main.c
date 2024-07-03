@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <linux/limits.h>
 #include <stb_image.h>
 #include <math.h>
 
@@ -15,10 +14,11 @@
 #define MIN_PITCH (-MAX_PITCH)
 #define SENSITIVITY 0.1F
 
-#define CHUNK_LEN 16 
+#define CHUNK_LEN 32 
 #define MAX_BLOCKS (CHUNK_LEN * CHUNK_LEN * CHUNK_LEN)
 #define MAX_QUEUE (MAX_BLOCKS)
-#define MAX_VERTICES (36 * MAX_BLOCKS) 
+#define MAX_VERTICES (24 * MAX_BLOCKS) 
+#define MAX_INDICES (36 * MAX_BLOCKS) 
 
 #define NEG_X 0
 #define POS_X 1
@@ -26,7 +26,6 @@
 #define POS_Y 3
 #define NEG_Z 4
 #define POS_Z 5
-
 #define LEFT     1U
 #define RIGHT    2U
 #define BOTTOM   4U
@@ -39,9 +38,13 @@
 #define NUM_VAOS      2
 
 #define VBO_MAP       0
-#define VBO_CROSSHAIR 1
-#define EBO_CROSSHAIR 2
-#define NUM_BOS       3 
+#define EBO_MAP       1
+#define VBO_CROSSHAIR 2
+#define EBO_CROSSHAIR 3
+#define NUM_BOS       4 
+
+#define OBJ_PLAYER 0
+#define OBJ_ITEM   1
 
 #define FOR_XYZ_ALL \
 	for (x = 0; x < CHUNK_LEN; x++) \
@@ -55,13 +58,13 @@
 
 #define IV3_IDX(a, v) (a[(v)[0]][(v)[1]][(v)[2]])
 
+#define ENABLE_ATTRIB(i, n, type, member) enable_attrib(i, n, \
+		sizeof(type), offsetof(type, member))
+
 struct vertex {
-	uint32_t x : 5;
-	uint32_t y : 5;
-	uint32_t z : 5;
-	uint32_t u : 4;
-	uint32_t v : 4;
-	uint32_t l : 8;
+	vec3 xyz; 
+	vec2 uv;
+	float lum;
 };
 
 struct prism {
@@ -74,55 +77,86 @@ struct light_node {
 	int l;
 };
 
-static struct vertex cube[6][6] = {
-	{
-		{0, 1, 1, 0, 0},
-		{0, 1, 0, 1, 0},
-		{0, 0, 0, 1, 1},
-		{0, 0, 0, 1, 1},
-		{0, 0, 1, 0, 1},
-		{0, 1, 1, 0, 0},
+struct hotbar_slot {
+	uint8_t id;
+	uint8_t n; 
+};
+
+struct object {
+	int type;
+	vec3 pos;
+	vec3 vel;
+	int grounded;
+	int id;
+	float rot;
+};
+
+struct prism locals[] = {
+	[OBJ_PLAYER] = {
+		{-0.3F, 0.0F, -0.3F},
+		{0.3F, 1.8F, 0.3F} 
 	},
-	{
-		{1, 1, 1, 1, 0},
-		{1, 0, 1, 1, 1},
-		{1, 0, 0, 0, 1},
-		{1, 0, 0, 0, 1},
-		{1, 1, 0, 0, 0},
-		{1, 1, 1, 1, 0},
-	},
-	{
-		{1, 0, 1, 0, 0},
-		{0, 0, 1, 1, 0},
-		{0, 0, 0, 1, 1},
-		{0, 0, 0, 1, 1},
-		{1, 0, 0, 0, 1},
-		{1, 0, 1, 0, 0},
-	},
-	{
-		{1, 1, 1, 0, 1},
-		{1, 1, 0, 0, 0},
-		{0, 1, 0, 1, 0},
-		{0, 1, 0, 1, 0},
-		{0, 1, 1, 1, 1},
-		{1, 1, 1, 0, 1},
-	},
-	{
-		{1, 1, 0, 1, 0},
-		{1, 0, 0, 1, 1},
-		{0, 0, 0, 0, 1},
-		{0, 0, 0, 0, 1},
-		{0, 1, 0, 0, 0},
-		{1, 1, 0, 1, 0},
-	},
-	{
-		{1, 1, 1, 0, 0},
-		{0, 1, 1, 1, 0},
-		{0, 0, 1, 1, 1},
-		{0, 0, 1, 1, 1},
-		{1, 0, 1, 0, 1},
-		{1, 1, 1, 0, 0},
-	},
+	[OBJ_ITEM] = {
+		{-0.5F, -0.5F, -0.5F},
+		{0.5F, 0.5F, 0.5F},
+	}
+};
+
+struct object player = {
+	.type =  OBJ_PLAYER,
+	.pos = {8.0F, 1.5F, 8.0F}
+};
+
+static uint32_t cube_indices[] = {
+	0, 1, 2,
+	2, 3, 0,
+	4, 5, 6,
+	6, 7, 4,
+	8, 9, 10,
+	10, 11, 8,
+	12, 13, 14,
+	14, 15, 12,
+	16, 17, 18,
+	18, 19, 16,
+	20, 21, 22,
+	22, 23, 20,
+};
+
+static struct vertex cube_vertices[24] = {
+	{{-0.5F, 0.5F, 0.5F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {0.0F, 1.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, 0.5F}, {0.0F, 0.0F}},
+	{{0.5F, -0.5F, 0.5F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, -0.5F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, -0.5F}, {1.0F, 0.0F}},
+	{{0.5F, -0.5F, 0.5F}, {1.0F, 0.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, -0.5F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, 0.5F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F, -0.5F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {0.0F, 0.0F}},
+	{{-0.5F, 0.5F, 0.5F}, {0.0F, 1.0F}},
+	{{0.5F, 0.5F, -0.5F}, {0.0F, 0.0F}},
+	{{0.5F, -0.5F, -0.5F}, {0.0F, 1.0F}},
+	{{-0.5F, -0.5F, -0.5F}, {1.0F, 1.0F}},
+	{{-0.5F, 0.5F, -0.5F}, {1.0F, 0.0F}},
+	{{0.5F, 0.5F, 0.5F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F, 0.5F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F, 0.5F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F, 0.5F}, {1.0F, 1.0F}},
+};
+
+
+static struct vertex square[] = {
+	{{0.5F, 0.5F}, {1.0F, 0.0F}},
+	{{-0.5F, 0.5F}, {0.0F, 0.0F}},
+	{{-0.5F, -0.5F}, {0.0F, 1.0F}},
+	{{-0.5F, -0.5F}, {0.0F, 1.0F}},
+	{{0.5F, -0.5F}, {1.0F, 1.0F}},
+	{{0.5F, 0.5F}, {1.0F, 0.0F}},
 };
 
 static uint8_t crosshair_indices[] = {
@@ -143,34 +177,42 @@ static vec2 crosshair_vertices[] = {
 	{0.005F, -0.05F},
 };
 
-static struct prism model_prism = { 
-	{-0.3F, 0.0F, -0.3F},
-	{0.3F, 1.8F, 0.3F} 
-};
-
 #define AIR   0
 #define DIRT  1
 #define GRASS 2
 
-static uint8_t blocks[][6] = {
-	{},
-	{0, 0, 0, 0, 0, 0},
-	{2, 2, 0, 1, 2, 2},
+static vec2 block_uvs[][6] = {
+	[AIR] = {},
+	[DIRT] = {
+		{0.0F, 0.0F}, 
+		{0.0F, 0.0F}, 
+		{0.0F, 0.0F}, 
+		{0.0F, 0.0F}, 
+		{0.0F, 0.0F}, 
+		{0.0F, 0.0F},
+	},
+	[GRASS] = {
+		{2.0F, 0.0F},
+		{2.0F, 0.0F},
+		{0.0F, 0.0F},
+		{1.0F, 0.0F},
+		{2.0F, 0.0F},
+		{2.0F, 0.0F},
+	}
 };
 
-static uint8_t light_factors[6] = {
-	8, 8, 5, 10, 6, 6
+static float light_factors[6] = {
+	0.9F, 0.9F, 0.7F, 1.0F, 0.8F, 0.8F
 };
-
-static vec3 player_pos;
-static vec3 player_vel;
-static int grounded;
 
 static uint8_t map[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
 static uint8_t faces[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN];
 static uint8_t lights[CHUNK_LEN][CHUNK_LEN][CHUNK_LEN][6];
+
 static struct vertex vertices[MAX_VERTICES];
+static uint32_t indices[MAX_INDICES];
 static int nvertices;
+static int nindices;
 
 static int width = 640;
 static int height = 480;
@@ -194,6 +236,24 @@ static int nqueue;
 
 static float yaw; 
 static float pitch;
+
+static struct hotbar_slot hotbar_slots[10];
+static int hotbar_sel;
+
+struct object items[MAX_BLOCKS];
+static int num_items;
+
+static void ivec3_to_vec3(ivec3 iv, vec3 v) {
+	v[0] = iv[0];
+	v[1] = iv[1];
+	v[2] = iv[2];
+}
+
+static void vec3_to_ivec3(vec3 v, ivec3 iv) {
+	iv[0] = v[0];
+	iv[1] = v[1];
+	iv[2] = v[2];
+}
 
 [[noreturn]]
 static void die(const char *fmt, ...) {
@@ -243,10 +303,13 @@ static unsigned load_shader(GLenum type, const char *path) {
 	int status;
 	char log[1024];
 	const char *src;
-	char full[PATH_MAX];
+	char *full;
 
-	snprintf(full, PATH_MAX, "shader/%s", path);
+	if (asprintf(&full, "shader/%s", path) < 0) {
+		die("asprintf oom\n");
+	}
 	src = read_all_str(full);
+	free(full);
 	if (!src) {
 		die("load_shader: %s\n", strerror(errno));
 	}
@@ -300,42 +363,31 @@ static void resize_cb(GLFWwindow *wnd, int w, int h) {
 	height = h;
 }
 
-static char *stpecpy(char *dst, char *end, const char *src) {
-	if (dst == end) {
-		return end;
-	}
-	do {
-		*dst = *src++;
-		if (!*dst) {
-			return dst;
-		}
-	} while (++dst < end);
-	end[-1] = '\0';
-	return end;
-}
-
 static void set_data_path(void) {
-	char path[PATH_MAX];
-	char *nul, *end;
+	char *path, *nul;
+	size_t n;
 
-	if (!realpath("/proc/self/exe", path)) {
+	path = realpath("/proc/self/exe", NULL);
+	if (!path) {
 		die("realpath(): %s\n", strerror(errno));
 	}
 	nul = strrchr(path, '/');
 	if (!nul) {
 		die("path missing slash\n");
 	}
-	end = path + PATH_MAX; 
-	nul = stpecpy(nul + 1, end, "res");
-	if (nul == end) {
-		die("path too long\n");
+	n = nul + 1 - path;
+	path = realloc(path, n + sizeof("res") + 1);
+	if (!path) {
+		die("path oom\n");
 	}
+	strcpy(path + n, "res");
 	if (chdir(path) < 0) {
 		die("chdir(): %s\n", strerror(errno));
 	}
+	free(path);
 }
 
-static float clamp(float v, float l, float h) {
+static float clampf(float v, float l, float h) {
 	return fminf(fmaxf(v, l), h);
 }
 
@@ -360,7 +412,7 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	yaw += off_x;
 	pitch += off_y;
 	yaw = fmodf(yaw, GLM_PIf * 2.0F);
-	pitch = clamp(pitch, MIN_PITCH, MAX_PITCH);
+	pitch = clampf(pitch, MIN_PITCH, MAX_PITCH);
 }
 
 static void update_cam_dirs(void) {
@@ -371,41 +423,6 @@ static void update_cam_dirs(void) {
 	forw[1] = 0.0F;
 	forw[2] = sinf(yaw);
 	glm_cross(forw, up, right);
-}
-
-static void add_vertex(int x, int y, int z) {
-	struct vertex c, *v;
-	int i, j;
-	uint8_t *b;
-
-	b = &map[x][y][z];
-	for (i = 0; i < 6; i++) {
-		if ((faces[x][y][z] >> i) & 1) {
-			for (j = 0; j < 6; j++) {
-				v = &vertices[nvertices++];
-				c = cube[i][j];
-				v->x = x + c.x;
-				v->y = y + c.y;
-				v->z = z + c.z;
-				v->u = blocks[*b][i] + c.u; 
-				v->v = c.v;
-				v->l = lights[x][y][z][i] *
-				       (light_factors[i] + 
-				       (b == block_itc) * 2); 
-			}
-		}
-	}
-}
-
-static void create_map(void) {
-	int x, z;
-
-	for (x = 0; x < CHUNK_LEN; x++) {
-		for (z = 0; z < CHUNK_LEN; z++) {
-			map[x][0][z] = DIRT;
-			map[x][1][z] = GRASS;
-		}
-	}
 }
 
 static int inbounds(ivec3 v) {
@@ -421,6 +438,48 @@ static int inbounds(ivec3 v) {
 
 static uint8_t *map_get(ivec3 v) {
 	return inbounds(v) ? &map[v[0]][v[1]][v[2]] : NULL;
+}
+
+static void add_faces(int x, int y, int z) {
+	struct vertex *v;
+	int i, j;
+	uint8_t *b;
+	uint32_t *idx;
+
+	b = &map[x][y][z];
+	for (i = 0; i < 6; i++) {
+		if ((faces[x][y][z] >> i) & 1) {
+			for (j = 0; j < 6; j++) {
+				idx = indices + nindices++;
+				*idx = nvertices + cube_indices[j];
+			}
+			for (j = 0; j < 4; j++) {
+				v = &vertices[nvertices++];
+				*v = cube_vertices[i * 4 + j];
+				v->xyz[0] += x;
+				v->xyz[1] += y;
+				v->xyz[2] += z;
+				glm_vec2_add(v->uv, block_uvs[*b][i], v->uv); 
+				glm_vec2_divs(v->uv, 16.0F, v->uv);
+				v->lum = (lights[x][y][z][i] + 1) / 16.0F * 
+					 light_factors[i]; 
+				if (b == block_itc) {
+					v->lum *= 1.2F;
+				}
+			}
+		}
+	}
+}
+
+static void create_map(void) {
+	int x, z;
+
+	for (x = 0; x < CHUNK_LEN; x++) {
+		for (z = 0; z < CHUNK_LEN; z++) {
+			map[x][0][z] = DIRT;
+			map[x][1][z] = GRASS;
+		}
+	}
 }
 
 static void enqueue(struct light_node *old) {
@@ -484,6 +543,36 @@ static void flood(void) {
 	}
 }
 
+static void create_item_vertices(void) {
+	int i, j;
+	struct vertex *v;
+	float c, s, x, z;
+	vec2 *uv;
+
+	for (i = 0; i < num_items; i++) {
+		for (j = 0; j < 36; j++) {
+			indices[nindices++] = cube_indices[j] + nvertices;
+		}
+		c = cosf(items[i].rot);
+		s = sinf(items[i].rot);
+		uv = block_uvs[items[i].id];
+		for (j = 0; j < 24; j++) {
+			v = vertices + nvertices++;
+			*v = cube_vertices[j];
+			x = v->xyz[0];
+			z = v->xyz[2];
+			v->xyz[0] = x * c - z * s; 
+			v->xyz[2] = x * s + z * c;
+			glm_vec3_divs(v->xyz, 4.0F, v->xyz);
+			glm_vec3_add(v->xyz, items[i].pos, v->xyz);
+			glm_vec2_add(v->uv, uv[j / 4], v->uv);
+			glm_vec2_divs(v->uv, 16.0F, v->uv);
+			v->lum = light_factors[j / 4];
+		}
+		items[i].rot += dt;
+	}
+}
+
 static void create_vertices(void) {
 	int x, y, z;
 
@@ -518,11 +607,13 @@ static void create_vertices(void) {
 	flood();
 
 	nvertices = 0;
+	nindices = 0;
 	FOR_XYZ_ALL {
 		if (map[x][y][z]) {
-			add_vertex(x, y, z);
+			add_faces(x, y, z);
 		}
 	}
+	create_item_vertices();
 }
 
 static int axis_collide(struct prism *a, struct prism *b, int axis) {
@@ -539,27 +630,22 @@ static int prism_collide(struct prism *a, struct prism *b) {
 	return 1;
 }
 
-static int clampi(int v, int l, int h) {
-	return v < l ? l : (v > h ? h : v);
+static void get_world_prism(struct prism *world, struct object *obj) {
+	struct prism *local;
+	
+	local = locals + obj->type;
+	glm_vec3_add(obj->pos, local->min, world->min);
+	glm_vec3_add(obj->pos, local->max, world->max);
 }
 
-static void get_player_prism(struct prism *prism) {
-	prism->min[0] = player_pos[0] - 0.3F;
-	prism->min[1] = player_pos[1];
-	prism->min[2] = player_pos[2] - 0.3F; 
-	prism->max[0] = player_pos[0] + 0.3F;
-	prism->max[1] = player_pos[1] + 1.8F;
-	prism->max[2] = player_pos[2] + 0.3F;
-}
-
-static void get_moving_player_prism(struct prism *prism, int axis) {
-	get_player_prism(prism);
-	if (player_vel[axis] < 0.0F) {
-		prism->max[axis] = prism->min[axis];
-		prism->min[axis] += player_vel[axis] * dt;
+static void get_disp_prism(struct object *obj, struct prism *disp, int axis) {
+	get_world_prism(disp, obj);
+	if (obj->vel[axis] < 0.0F) {
+		disp->max[axis] = disp->min[axis];
+		disp->min[axis] += obj->vel[axis] * dt;
 	} else {
-		prism->min[axis] = prism->max[axis];
-		prism->max[axis] += player_vel[axis] * dt;
+		disp->min[axis] = disp->max[axis];
+		disp->max[axis] += obj->vel[axis] * dt;
 	}
 }
 
@@ -576,8 +662,12 @@ static void get_block_coord(vec3 src, ivec3 dst) {
 	int i;
 
 	for (i = 0; i < 3; i++) {
-		dst[i] = floorf(src[i] + 0.5F);
+		dst[i] = roundf(src[i]);
 	}
+}
+
+static int clampi(int v, int l, int h) {
+	return v < l ? l : (v > h ? h : v);
 }
 
 static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
@@ -591,49 +681,83 @@ static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
 	}
 }
 
-static void axis_move(int axis) {
-	struct prism player_prism;
-	struct prism block_prism;
+static int add_to_hotbar(int id) {
+	int i;
+	struct hotbar_slot *slot, *empty;
+
+	empty = NULL;
+	for (i = 0; i < 10; i++) {
+		slot = hotbar_slots + i;
+		if (slot->id == id && 
+		    slot->n > 0 && slot->n < 64) {
+			slot->n++;
+			return 1;
+		}
+		if (!empty && !slot->n) {
+			empty = slot;
+		}
+	}
+	if (!empty) {
+		return 0;
+	}	
+	empty->id = id;
+	empty->n = 1;
+	return 1;
+}
+
+static void move(struct object *obj) {
+	struct prism disp;
+	struct prism block; 
+	struct prism *local;
 	ivec3 pos, min, max;
 	float new, tmp;
 	float vel;
-
-	if (fabsf(player_vel[axis]) < 1e-5F) {
-		return;
-	}
-	vel = player_vel[axis];
-	get_moving_player_prism(&player_prism, axis);
-	get_detect_bounds(&player_prism, min, max);
-	new = player_pos[axis] + vel * dt;
-	FOR_XYZ (pos, min, max) {
-		if (!map[pos[0]][pos[1]][pos[2]]) {
-			continue;
-		}
-		get_block_prism(&block_prism, pos);
-		if (!prism_collide(&player_prism, &block_prism)) {
-			continue;
-		}
-		if (vel < 0.0F) {
-			tmp = block_prism.max[axis] - model_prism.min[axis];
-			new = fmaxf(new, tmp);
-			if (axis == 1) {
-				grounded = 1;
-			}
-		} else {
-			tmp = block_prism.min[axis] - model_prism.max[axis];
-			new = fminf(new, tmp);
-		}
-		player_vel[axis] = 0.0F;
-	}
-	player_pos[axis] = new;
-}
-
-static void player_move(void) {
 	int axis;
+	int i;
 
+	local = locals + obj->type;
 	for (axis = 0; axis < 3; axis++) {
-		axis_move(axis);
+		vel = obj->vel[axis];
+		get_disp_prism(obj, &disp, axis);
+		get_detect_bounds(&disp, min, max);
+		new = obj->pos[axis] + vel * dt;
+		FOR_XYZ (pos, min, max) {
+			if (!IV3_IDX(map, pos)) {
+				continue;
+			}
+			get_block_prism(&block, pos);
+			if (!prism_collide(&disp, &block)) {
+				continue;
+			}
+			if (vel < 0.0F) {
+				tmp = block.max[axis] - local->min[axis];
+				new = fmaxf(new, tmp);
+				if (axis == 1) {
+					obj->grounded = 1;
+				}
+				disp.min[axis] = new;
+			} else {
+				tmp = block.min[axis] - local->max[axis];
+				new = fminf(new, tmp);
+				disp.max[axis] = new;
+			}
+			obj->vel[axis] = 0.0F;
+		}
+		if (obj->type == OBJ_PLAYER) {
+			for (i = 0; i < num_items; ) {
+				vec3_to_ivec3(items[i].pos, pos);
+				get_block_prism(&block, pos);
+				if (prism_collide(&disp, &block) &&
+				    add_to_hotbar(items[i].id)) {
+					items[i] = items[--num_items];
+				} else {
+					i++;
+				}
+			}
+		}
+		obj->pos[axis] = new;
 	}
+	obj->vel[1] = fmaxf(obj->vel[1] - 24.0F * dt, -64.0F);
 }
 
 static int vec3_min_idx(vec3 v) {
@@ -679,17 +803,82 @@ static void find_block_itc(void) {
 			break;
 		}
 	} 
-	for (i = 0; i < 3; i++) {
-		v[i] = pos_itc[i];
-	}
+	ivec3_to_vec3(pos_itc, v);
 	if (glm_vec3_distance2(v, eye) > 25.0F) {
 		block_itc = NULL;
 	}
 }
 
 static void remove_block(void) {
-	if (block_itc) {
-		*block_itc = 0;
+	struct object *item;
+
+	if (!block_itc) {
+		return;
+	}
+	if (num_items == MAX_BLOCKS) {
+		die("items oom\n");
+	}
+	item = items + num_items++;
+	item->type = OBJ_ITEM;
+	ivec3_to_vec3(pos_itc, item->pos);
+	glm_vec3_zero(item->vel); 
+	item->id = *block_itc;
+	item->rot = 0.0F;
+	*block_itc = 0;
+}
+
+static void add_square(vec2 uv, float div, vec2 xy, float scale, float lum) {
+	int i;
+	struct vertex *v;
+
+	for (i = 0; i < 6; i++) { 
+		v = vertices + nvertices++;
+		glm_vec2_add(square[i].uv, uv, v->uv);
+		glm_vec2_divs(v->uv, div, v->uv);
+		glm_vec2_scale(square[i].xyz, scale, v->xyz);
+		glm_vec2_add(v->xyz, xy, v->xyz);
+		v->xyz[2] = 0.0F;
+		v->lum = lum;
+	}
+}
+
+static void render_digit(int val, float x) {
+	vec2 uv, xy;
+
+	uv[0] = (int) (val / 4) * 2 + val % 2 + 8.0F;
+	uv[1] = val / 2 % 2;
+	xy[0] = x;
+	xy[1] = -6.85F;
+	add_square(uv, 32.0F, xy, 0.3F, 1.0F);
+}
+
+static void hotbar_add(void) {
+	int i;
+	struct hotbar_slot *slot;
+	vec2 uv;
+	vec2 xy;
+	float lum;
+
+	nvertices = 0;
+	for (i = 0; i < 10; i++) {
+		uv[0] = 3;
+		uv[1] = 0;
+		xy[0] = i - 5;
+		xy[1] = -7;
+		lum = (i == hotbar_sel) ? 2.5F : 1.0F;
+		add_square(uv, 16.0F, xy, 1.0F, lum);
+		slot = hotbar_slots + i;
+		if (!slot->n) {
+			continue;
+		}
+		xy[0] = i - 5.0F; 
+		xy[1] = -7.0F;
+		add_square(block_uvs[slot->id][5], 16.0F, 
+				xy, 0.6F, 1.0F);
+		if (slot->n > 9) {
+			render_digit(slot->n / 10, i - 5.1F);
+		}
+		render_digit(slot->n % 10, i - 4.8F);
 	}
 }
 
@@ -698,6 +887,7 @@ static void add_block(void) {
 	struct prism player_prism;
 	struct prism block_prism;
 	uint8_t *block;
+	struct hotbar_slot *slot;
 
 	if (!block_itc) {
 		return;
@@ -708,15 +898,25 @@ static void add_block(void) {
 	} else {
 		place_pos[axis_itc]--; 
 	}
-	get_player_prism(&player_prism);
+	get_world_prism(&player_prism, &player);
 	get_block_prism(&block_prism, place_pos);
 	if (prism_collide(&player_prism, &block_prism)) {
 		return;
 	}
 	block = map_get(place_pos);
 	if (block) {
-		*block = 1;
+		slot = hotbar_slots + hotbar_sel;
+		if (slot->n) {
+			*block = slot->id; 
+			slot->n--;
+		}
 	}
+}
+
+static void enable_attrib(int i, int n, size_t stride, size_t offset) {
+	glVertexAttribPointer(i, n, GL_FLOAT, 
+			GL_FALSE, stride, (void *) offset);
+	glEnableVertexAttribArray(i);
 }
 
 int main(void) {
@@ -734,6 +934,7 @@ int main(void) {
 	vec3 center;
 	int held_left, held_right;
 	vec3 aspect;
+	int i;
 
 	if (!glfwInit()) {
 		glfw_die("glfwInit");
@@ -752,7 +953,7 @@ int main(void) {
 		glfw_die("glfwGetProcAddress");
 	}
 	set_data_path();
-	data = stbi_load("img/atlas.png", &w, &h, &channels, 3);
+	data = stbi_load("img/atlas.png", &w, &h, &channels, 4);
 	if (!data) {
 		die("stbi_load: %s\n", stbi_failure_reason());
 	}
@@ -764,8 +965,8 @@ int main(void) {
 			GL_NEAREST_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
 			GL_NEAREST);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 
-			0, GL_RGB, GL_UNSIGNED_BYTE, data); 
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 
+			0, GL_RGBA, GL_UNSIGNED_BYTE, data); 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 4);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	stbi_image_free(data);
@@ -776,8 +977,12 @@ int main(void) {
 	glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_MAP]);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), 
 			NULL, GL_DYNAMIC_DRAW);
-	glVertexAttribIPointer(0, 1, GL_UNSIGNED_INT, 4, NULL);
-	glEnableVertexAttribArray(0);
+	ENABLE_ATTRIB(0, 3, struct vertex, xyz); 
+	ENABLE_ATTRIB(1, 2, struct vertex, uv); 
+	ENABLE_ATTRIB(2, 1, struct vertex, lum); 
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[EBO_MAP]);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), 
+			NULL, GL_DYNAMIC_DRAW);
 	glBindVertexArray(0);
 	glBindVertexArray(vaos[VAO_CROSSHAIR]);
 	glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_CROSSHAIR]);
@@ -799,6 +1004,8 @@ int main(void) {
 	glfwSwapInterval(1);
 	glfwShowWindow(wnd);
 	t0 = glfwGetTime();
+	glDepthFunc(GL_LESS);
+	glCullFace(GL_BACK);
 	glUseProgram(block_prog);
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, tex);
@@ -808,36 +1015,43 @@ int main(void) {
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
 		t1 = glfwGetTime();
-		dt = clamp(t1 - t0, 0.0001F, 1000.0F);
+		dt = clampf(t1 - t0, 0.0001F, 1000.0F);
 		t0 = t1;
 		update_cam_dirs();
-		player_vel[0] = 0.0F;
-		player_vel[2] = 0.0F;
+		player.vel[0] = 0.0F;
+		player.vel[2] = 0.0F;
 		if (glfwGetKey(wnd, GLFW_KEY_W)) {
-			glm_vec3_muladds(forw, 5.0F, player_vel);
+			glm_vec3_muladds(forw, 5.0F, player.vel);
 		} 
 		if (glfwGetKey(wnd, GLFW_KEY_S)) {
-			glm_vec3_mulsubs(forw, 5.0F, player_vel);
+			glm_vec3_mulsubs(forw, 5.0F, player.vel);
 		}
 		if (glfwGetKey(wnd, GLFW_KEY_A)) {
-			glm_vec3_mulsubs(right, 5.0F, player_vel);
+			glm_vec3_mulsubs(right, 5.0F, player.vel);
 		} 
 		if (glfwGetKey(wnd, GLFW_KEY_D)) {
-			glm_vec3_muladds(right, 5.0F, player_vel);
+			glm_vec3_muladds(right, 5.0F, player.vel);
 		}
-		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && grounded) {
-			glm_vec3_muladds(up, 8.0F, player_vel);
+		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && player.grounded) {
+			glm_vec3_muladds(up, 8.0F, player.vel);
 		}
-		grounded = 0;
-		player_move();
-		player_vel[1] = fmaxf(player_vel[1] - 24.0F * dt, -64.0F);
-		glm_vec3_copy(player_pos, eye);
+		for (i = 0; i < 9; i++) {
+			if (glfwGetKey(wnd, GLFW_KEY_1 + i)) {
+				hotbar_sel = i;
+			}
+		} 
+		if (glfwGetKey(wnd, GLFW_KEY_0)) {
+			hotbar_sel = 9;
+		}
+		player.grounded = 0;
+		move(&player);
+		glm_vec3_copy(player.pos, eye);
 		eye[1] += 1.7F;
 		find_block_itc();
 		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_LEFT) 
 				== GLFW_PRESS) {
 			if (!held_left) {
-				add_block();
+				remove_block();
 				held_left = 1;
 			}
 		} else {
@@ -846,11 +1060,14 @@ int main(void) {
 		if (glfwGetMouseButton(wnd, GLFW_MOUSE_BUTTON_RIGHT) 
 				== GLFW_PRESS) {
 			if (!held_right) {
-				remove_block();
+				add_block();
 				held_right = 1;
 			}
 		} else {
 			held_right = 0;
+		}
+		for (i = 0; i < num_items; i++) {
+			move(items + i);
 		}
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
@@ -862,8 +1079,6 @@ int main(void) {
 		create_vertices();
 		glEnable(GL_DEPTH_TEST);
 		glEnable(GL_CULL_FACE);
-		glDepthFunc(GL_LESS);
-		glCullFace(GL_BACK);
 		glUseProgram(block_prog);
 		glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) world);
 		glBindVertexArray(vaos[VAO_MAP]);
@@ -871,9 +1086,25 @@ int main(void) {
 		glBufferSubData(GL_ARRAY_BUFFER, 0,
 				nvertices * sizeof(*vertices), 
 				vertices);
-		glDrawArrays(GL_TRIANGLES, 0, nvertices);
+		glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+				nindices * sizeof(*indices),
+				indices);
+		glDrawElements(GL_TRIANGLES, nindices, GL_UNSIGNED_INT, NULL);
 		glDisable(GL_DEPTH_TEST);
 		glDisable(GL_CULL_FACE);
+		aspect[0] = (float) height / width;
+		aspect[1] = 1.0F;
+		aspect[2] = 1.0F;
+		glm_vec3_divs(aspect, 8.0F, aspect);
+		glm_scale_make(world, aspect);
+		hotbar_add();
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) world);
+		glBufferSubData(GL_ARRAY_BUFFER, 0,
+				nvertices * sizeof(*vertices), 
+				vertices);
+		glDrawArrays(GL_TRIANGLES, 0, nvertices);
 		glUseProgram(crosshair_prog);
 		glBindVertexArray(vaos[VAO_CROSSHAIR]);
 		aspect[0] = (float) height / width;

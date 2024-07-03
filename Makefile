@@ -2,8 +2,8 @@ INC=-Ilib/glad/include -Ilib/stb/ -Ilib/glfw/include -Ilib/cglm/include
 
 OBJ=lib/glad/src/gl.o lib/stb/stb_image.o lib/glfw/src/libglfw3.a
 
-all: $(OBJ)
-	gcc src/*.c $(INC) $^ -lm -o mine -Wall -O2
+mine: src/*.c $(OBJ)
+	gcc $(INC) $^ -lm -o mine -Wall -O2 
 
 lib/glad/src/gl.o:
 	gcc $(@:.o=.c) -o $@ -Ilib/glad/include -c
