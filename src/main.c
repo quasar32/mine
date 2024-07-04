@@ -47,6 +47,9 @@
 #define OBJ_PLAYER 0
 #define OBJ_ITEM   1
 
+#define GROUNDED 1U
+#define STUCK    2U
+
 #define FOR_XYZ_ALL \
 	for (x = 0; x < CHUNK_LEN; x++) \
 		for (y = 0; y < CHUNK_LEN; y++) \
@@ -85,9 +88,9 @@ struct hotbar_slot {
 
 struct object {
 	int type;
+	unsigned flags;
 	vec3 pos;
 	vec3 vel;
-	int grounded;
 	int id;
 	float rot;
 };
@@ -98,8 +101,8 @@ struct prism locals[] = {
 		{0.3F, 1.8F, 0.3F} 
 	},
 	[OBJ_ITEM] = {
-		{-0.5F, -0.5F, -0.5F},
-		{0.5F, 0.5F, 0.5F},
+		{-0.25F, -0.25F, -0.25F},
+		{0.25F, 0.25F, 0.25F},
 	}
 };
 
@@ -248,12 +251,6 @@ static void ivec3_to_vec3(ivec3 iv, vec3 v) {
 	v[0] = iv[0];
 	v[1] = iv[1];
 	v[2] = iv[2];
-}
-
-static void vec3_to_ivec3(vec3 v, ivec3 iv) {
-	iv[0] = v[0];
-	iv[1] = v[1];
-	iv[2] = v[2];
 }
 
 [[noreturn]]
@@ -675,7 +672,7 @@ static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
 	int i;
 
 	for (i = 0; i < 3; i++) {
-		min[i] = floorf(prism->min[i] - 0.5F);
+		min[i] = floorf(prism->min[i] + 0.5F);
 		max[i] = ceilf(prism->max[i] + 0.5F);
 		min[i] = clampi(min[i], 0, CHUNK_LEN);
 		max[i] = clampi(max[i], 0, CHUNK_LEN);
@@ -706,59 +703,112 @@ static int add_to_hotbar(int id) {
 	return 1;
 }
 
-static void move(struct object *obj) {
-	struct prism disp;
+static void player_item_col(struct prism *disp) {
 	struct prism block; 
-	struct prism *local;
-	ivec3 pos, min, max;
-	float new, tmp;
-	float vel;
-	int axis;
 	int i;
 
-	local = locals + obj->type;
-	for (axis = 0; axis < 3; axis++) {
-		vel = obj->vel[axis];
-		get_disp_prism(obj, &disp, axis);
-		get_detect_bounds(&disp, min, max);
-		new = obj->pos[axis] + vel * dt;
-		FOR_XYZ (pos, min, max) {
-			if (!IV3_IDX(map, pos)) {
-				continue;
-			}
-			get_block_prism(&block, pos);
-			if (!prism_collide(&disp, &block)) {
-				continue;
-			}
-			if (vel < 0.0F) {
-				tmp = block.max[axis] - local->min[axis];
-				new = fmaxf(new, tmp);
-				if (axis == 1) {
-					obj->grounded = 1;
-				}
-				disp.min[axis] = new;
-			} else {
-				tmp = block.min[axis] - local->max[axis];
-				new = fminf(new, tmp);
-				disp.max[axis] = new;
-			}
-			obj->vel[axis] = 0.0F;
+	for (i = 0; i < num_items; ) {
+		get_world_prism(&block, items + i);
+		if (prism_collide(disp, &block) &&
+		    add_to_hotbar(items[i].id)) {
+			items[i] = items[--num_items];
+		} else {
+			i++;
 		}
-		if (obj->type == OBJ_PLAYER) {
-			for (i = 0; i < num_items; ) {
-				vec3_to_ivec3(items[i].pos, pos);
-				get_block_prism(&block, pos);
-				if (prism_collide(&disp, &block) &&
-				    add_to_hotbar(items[i].id)) {
-					items[i] = items[--num_items];
-				} else {
-					i++;
-				}
-			}
-		}
-		obj->pos[axis] = new;
 	}
-	obj->vel[1] = fmaxf(obj->vel[1] - 24.0F * dt, -64.0F);
+}
+
+static void move(struct object *obj) {
+	struct prism disp, block;
+	struct prism *local;
+	ivec3 pos, min, max;
+	float *blockf, *dispf, *posf, *velf;
+	float (*sel)(float, float);
+	float localf, off;
+	int axis, cols;
+
+	local = locals + obj->type;
+	if (obj->flags & STUCK) {
+		for (axis = 0; axis < 3; axis++) {
+			velf = obj->vel + axis;
+			if (*velf == 0.0F) {
+				continue;
+			}
+			get_disp_prism(obj, &disp, axis);
+			get_detect_bounds(&disp, min, max);
+			posf = obj->pos + axis;
+			if (*velf < 0.0F) {
+				dispf = disp.min + axis;
+				localf = local->min[axis];
+				off = 0.5F + localf * 2;
+				blockf = block.max + axis;
+				sel = fmaxf;
+			} else {
+				dispf = disp.max + axis;
+				localf = local->max[axis];
+				off = -0.5F + localf * 2;
+				blockf = block.min + axis;
+				sel = fminf;
+			}
+			cols = 0;
+			FOR_XYZ (pos, min, max) {
+				if (IV3_IDX(map, pos)) {
+					continue;
+				}
+				get_block_prism(&block, pos);
+				*blockf = pos[axis] + off;
+				if (prism_collide(&disp, &block)) {
+					*dispf = sel(*blockf, *dispf);
+					cols = 1;
+				}
+			}
+			if (cols) {
+				*velf = 0.0F;
+				obj->flags &= ~STUCK;
+			}
+			*posf = *dispf - localf;
+		}
+	}
+	if (!(obj->flags & STUCK)) {
+		for (axis = 0; axis < 3; axis++) {
+			velf = obj->vel + axis;
+			if (*velf == 0.0F) {
+				continue;
+			}
+			get_disp_prism(obj, &disp, axis);
+			get_detect_bounds(&disp, min, max);
+			posf = obj->pos + axis;
+			if (*velf < 0.0F) {
+				dispf = disp.min + axis;
+				localf = local->min[axis];
+				off = 0.5F;
+				sel = fmaxf;
+			} else {
+				dispf = disp.max + axis;
+				localf = local->max[axis];
+				off = -0.5F;
+				sel = fminf;
+			}
+			cols = 0;
+			FOR_XYZ (pos, min, max) {
+				if (IV3_IDX(map, pos)) {
+					*dispf = sel(pos[axis] + off, *dispf);
+					cols = 1;
+				}
+			}
+			if (cols) {
+				if (*velf < 0.0F && axis == 1) {
+					obj->flags |= GROUNDED;
+				}
+				*velf = 0.0F;
+			}
+			if (obj->type == OBJ_PLAYER) {
+				player_item_col(&disp);
+			}
+			*posf = *dispf - localf;
+		}
+		obj->vel[1] = fmaxf(obj->vel[1] - 24.0F * dt, -64.0F);
+	}
 }
 
 static int vec3_min_idx(vec3 v) {
@@ -821,6 +871,7 @@ static void remove_block(void) {
 	}
 	item = items + num_items++;
 	item->type = OBJ_ITEM;
+	item->flags = 0;
 	ivec3_to_vec3(pos_itc, item->pos);
 	glm_vec3_zero(item->vel); 
 	item->id = *block_itc;
@@ -916,18 +967,18 @@ static void add_block(void) {
 	}
 	*block = slot->id; 
 	slot->n--;
+	find_block_itc();
 	for (i = 0; i < num_items; i++) {
 		obj = items + i;
 		get_world_prism(&obj_prism, obj);
 		if (prism_collide(&obj_prism, &block_prism)) {
-			block = map_get(place_pos);
-			if (!block || !*block) {
-				if (front[axis_itc] < 0.0F) {
-					obj->pos[axis_itc]++;
-				} else {
-					obj->pos[axis_itc]--;
-				}
-			} 
+			glm_vec3_zero(obj->vel);
+			if (front[axis_itc] < 0.0F) {
+				obj->vel[axis_itc] = 3.0F;
+			} else {
+				obj->vel[axis_itc] = -3.0F;
+			}
+			obj->flags |= STUCK;
 		}
 	}
 }
@@ -1033,11 +1084,14 @@ int main(void) {
 	while (!glfwWindowShouldClose(wnd)) {
 		glfwPollEvents();
 		t1 = glfwGetTime();
-		dt = clampf(t1 - t0, 0.0001F, 1000.0F);
+		dt = t1 - t0;
 		t0 = t1;
 		update_cam_dirs();
 		player.vel[0] = 0.0F;
 		player.vel[2] = 0.0F;
+		if (glfwGetKey(wnd, GLFW_KEY_X)) {
+			glm_vec3_muladds(forw, 500.0F, player.vel);
+		} 
 		if (glfwGetKey(wnd, GLFW_KEY_W)) {
 			glm_vec3_muladds(forw, 5.0F, player.vel);
 		} 
@@ -1050,7 +1104,8 @@ int main(void) {
 		if (glfwGetKey(wnd, GLFW_KEY_D)) {
 			glm_vec3_muladds(right, 5.0F, player.vel);
 		}
-		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && player.grounded) {
+		if (glfwGetKey(wnd, GLFW_KEY_SPACE) && 
+				(player.flags & GROUNDED)) {
 			glm_vec3_muladds(up, 8.0F, player.vel);
 		}
 		for (i = 0; i < 9; i++) {
@@ -1061,7 +1116,7 @@ int main(void) {
 		if (glfwGetKey(wnd, GLFW_KEY_0)) {
 			hotbar_sel = 9;
 		}
-		player.grounded = 0;
+		player.flags &= ~GROUNDED;
 		move(&player);
 		glm_vec3_copy(player.pos, eye);
 		eye[1] += 1.7F;
