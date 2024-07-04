@@ -15,9 +15,9 @@
 #define MIN_PITCH (-MAX_PITCH)
 #define SENSITIVITY 0.1F
 
-#define CHUNK_LEN 32 
+#define CHUNK_LEN 5 
 #define MAX_BLOCKS (CHUNK_LEN * CHUNK_LEN * CHUNK_LEN)
-#define MAX_QUEUE (MAX_BLOCKS)
+#define MAX_QUEUE (2 * MAX_BLOCKS)
 #define MAX_VERTICES (24 * MAX_BLOCKS) 
 #define MAX_INDICES (36 * MAX_BLOCKS) 
 
@@ -108,7 +108,7 @@ struct prism locals[] = {
 
 struct object player = {
 	.type =  OBJ_PLAYER,
-	.pos = {8.0F, 1.5F, 8.0F}
+	.pos = {1.0F, 1.5F, 1.0F}
 };
 
 static uint32_t cube_indices[] = {
@@ -521,7 +521,7 @@ static void dequeue(struct light_node *n) {
 }
 
 static void flood(void) {
-	int x, z;
+	int x, y, z;
 	struct light_node q;
 
 	memset(lights, 0, sizeof(lights));
@@ -533,6 +533,19 @@ static void flood(void) {
 			q.v[2] = z;
 			q.l = 15;
 			enqueue(&q);
+			lights[x][0][z][NEG_Y] = 15;
+		}
+	}
+	for (x = 0; x < CHUNK_LEN; x++) {
+		for (y = 0; y < CHUNK_LEN; y++) {
+			lights[x][y][0][NEG_Z] = 15;
+			lights[x][y][CHUNK_LEN - 1][POS_Z] = 15;
+		}
+	}
+	for (y = 0; y < CHUNK_LEN; y++) {
+		for (z = 0; z < CHUNK_LEN; z++) {
+			lights[0][y][z][NEG_X] = 15;
+			lights[CHUNK_LEN - 1][y][z][POS_X] = 15;
 		}
 	}
 	while (nqueue) {
@@ -541,11 +554,40 @@ static void flood(void) {
 	}
 }
 
+static void get_block_coord(vec3 src, ivec3 dst) {
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		dst[i] = roundf(src[i]);
+	}
+}
+
+static float max_light(struct object *obj) {
+	int i;
+	ivec3 iv;
+	float max;
+	uint8_t *faces;
+
+	get_block_coord(obj->pos, iv);
+	if (!inbounds(iv)) {
+		return 1.0F;
+	}
+	faces = IV3_IDX(lights, iv); 
+	max = faces[0];
+	for (i = 1; i < 6; i++) {
+		if (faces[i] > max) {
+			max = faces[i];
+		}
+	}
+	return (max + 1) / 15.0F;
+}
+
 static void create_item_vertices(void) {
 	int i, j;
 	struct vertex *v;
 	float c, s, x, z;
 	vec2 *uv;
+	float light;
 
 	for (i = 0; i < num_items; i++) {
 		for (j = 0; j < 36; j++) {
@@ -554,6 +596,7 @@ static void create_item_vertices(void) {
 		c = cosf(items[i].rot);
 		s = sinf(items[i].rot);
 		uv = block_uvs[items[i].id];
+		light = max_light(items + i);
 		for (j = 0; j < 24; j++) {
 			v = vertices + nvertices++;
 			*v = cube_vertices[j];
@@ -565,7 +608,7 @@ static void create_item_vertices(void) {
 			glm_vec3_add(v->xyz, items[i].pos, v->xyz);
 			glm_vec2_add(v->uv, uv[j / 4], v->uv);
 			glm_vec2_divs(v->uv, 16.0F, v->uv);
-			v->lum = light_factors[j / 4];
+			v->lum = light_factors[j / 4] * light;
 		}
 		items[i].rot += dt;
 	}
@@ -653,14 +696,6 @@ static void get_block_prism(struct prism *prism, ivec3 v) {
 	for (i = 0; i < 3; i++) {
 		prism->min[i] = v[i] - 0.5F;
 		prism->max[i] = v[i] + 0.5F;
-	}
-}
-
-static void get_block_coord(vec3 src, ivec3 dst) {
-	int i;
-
-	for (i = 0; i < 3; i++) {
-		dst[i] = roundf(src[i]);
 	}
 }
 
