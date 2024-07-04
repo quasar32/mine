@@ -13,9 +13,9 @@
 
 #define MAX_PITCH (GLM_PI_2f - 0.01F)
 #define MIN_PITCH (-MAX_PITCH)
-#define SENSITIVITY 0.1F
+#define SENSITIVITY 0.001F
 
-#define CHUNK_LEN 5 
+#define CHUNK_LEN 16 
 #define MAX_BLOCKS (CHUNK_LEN * CHUNK_LEN * CHUNK_LEN)
 #define MAX_QUEUE (2 * MAX_BLOCKS)
 #define MAX_VERTICES (24 * MAX_BLOCKS) 
@@ -107,8 +107,8 @@ struct prism locals[] = {
 };
 
 struct object player = {
-	.type =  OBJ_PLAYER,
-	.pos = {1.0F, 1.5F, 1.0F}
+	.type = OBJ_PLAYER,
+	.pos = {CHUNK_LEN / 2.0F, 1.5F, CHUNK_LEN / 2.0F}
 };
 
 static uint32_t cube_indices[] = {
@@ -405,8 +405,8 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
 	off_y = last_y - y;
 	last_x = x;
 	last_y = y;
-	off_x *= dt * SENSITIVITY;
-	off_y *= dt * SENSITIVITY;
+	off_x *= SENSITIVITY;
+	off_y *= SENSITIVITY;
 	yaw += off_x;
 	pitch += off_y;
 	yaw = fmodf(yaw, GLM_PIf * 2.0F);
@@ -616,6 +616,7 @@ static void create_item_vertices(void) {
 
 static void create_vertices(void) {
 	int x, y, z;
+	double t0, t1;
 
 	FOR_XYZ_ALL {
 		if (!map[x][y][z]) {
@@ -645,7 +646,10 @@ static void create_vertices(void) {
 		}
 	}
 
+	t0 = glfwGetTime();
 	flood();
+	t1 = glfwGetTime();
+	printf("%f\n", (t1 - t0) * 1000.0);
 
 	nvertices = 0;
 	nindices = 0;
