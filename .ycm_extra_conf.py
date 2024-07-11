@@ -4,6 +4,7 @@ def Settings( **kwargs ):
         '-Ilib/glad/include', 
         '-Ilib/stb', 
         '-Ilib/glfw/include', 
-        '-Ilib/cglm/include'
+        '-Ilib/cglm/include',
+        '-Ilib/perlin-noise/src'
     ]
   }

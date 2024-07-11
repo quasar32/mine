@@ -1,9 +1,11 @@
-INC=-Ilib/glad/include -Ilib/stb/ -Ilib/glfw/include -Ilib/cglm/include
+INC =-Ilib/glad/include -Ilib/stb/ -Ilib/glfw/include 
+INC += -Ilib/cglm/include -Ilib/perlin-noise/src
 
-OBJ=lib/glad/src/gl.o lib/stb/stb_image.o lib/glfw/src/libglfw3.a
+OBJ = lib/glad/src/gl.o lib/stb/stb_image.o lib/glfw/src/libglfw3.a
+OBJ += lib/perlin-noise/src/noise1234.o
 
 mine: src/*.c $(OBJ)
-	gcc $(INC) $^ -lm -o mine -Wall -O2 
+	gcc $(INC) $^ -lm -o $@ -Wall -O2 
 
 lib/glad/src/gl.o:
 	gcc $(@:.o=.c) -o $@ -Ilib/glad/include -c
@@ -16,6 +18,9 @@ lib/glfw/src/libglfw3.a: lib/glfw/Makefile
 
 lib/glfw/Makefile:
 	cd lib/glfw && cmake . 
+
+lib/perlin-noise/src/noise1234.o:
+	gcc $(@:.o=.c) -o $@ -c
 
 clean:
 	make -C lib/glfw clean 
