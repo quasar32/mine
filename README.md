@@ -1,8 +1,3 @@
-Linux-only makefile \\
+Linux-only makefile
+
 Use git clone https://github.com/quasar32/mine --recursive \\
-
-Portability issues:
-dependences
-Makefile
-strerror()
-
