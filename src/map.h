@@ -4,6 +4,7 @@
 #include <cglm/ivec3.h>
 
 #define CHUNK_LEN 16 
+#define CHUNK_MASK (CHUNK_LEN - 1)
 #define NX_CHUNK 8
 #define NY_CHUNK 1
 #define NZ_CHUNK 8
@@ -53,6 +54,7 @@ struct chunk {
 extern struct chunk map[NX_CHUNK][NY_CHUNK][NZ_CHUNK];
 extern struct chunk *dirty_chunks[N_CHUNKS];
 extern int n_dirty_chunks;
+extern ivec3 chunk_dim;
 
 int in_chunk(ivec3 pos);
 int in_map(ivec3 pos);

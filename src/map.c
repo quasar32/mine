@@ -11,6 +11,8 @@ static struct bounds chunk_bounds = {
     {CHUNK_LEN, CHUNK_LEN, CHUNK_LEN},
 };
 
+ivec3 chunk_dim = {NX_CHUNK, NY_CHUNK, NZ_CHUNK};
+
 struct chunk map[NX_CHUNK][NY_CHUNK][NZ_CHUNK];
 struct chunk *dirty_chunks[N_CHUNKS];
 int n_dirty_chunks;
@@ -39,7 +41,7 @@ static void chunk_offset(ivec3 src, ivec3 dst) {
     int i;
 
     for (i = 0; i < 3; i++) {
-        dst[i] = src[i] % CHUNK_LEN;
+        dst[i] = src[i] & CHUNK_MASK;
     }
 }
 

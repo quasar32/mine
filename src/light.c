@@ -61,6 +61,7 @@ static void enqueue_outflow_one(struct chunk *in,
     int axes[2]; 
     int x, y;
     struct light light;
+    uint8_t *lum;
 
     if ((out->old_outflow & (1 << dir))) {
         other_axes(axis, axes);
@@ -69,8 +70,12 @@ static void enqueue_outflow_one(struct chunk *in,
                 light.pos[axis] = dir % 2 ? 0 : CHUNK_LEN - 1;
                 light.pos[axes[0]] = x;
                 light.pos[axes[1]] = y;
-                light.lum = in->outflow[dir][x][y];
-                enqueue_light(in, &light);
+                light.lum = out->outflow[dir][x][y];
+                lum = &V3SS(in->lums, light.pos); 
+                if (*lum < light.lum) {
+                    *lum = light.lum;
+                    enqueue_light(in, &light);
+                }
             }
         } 
     }
@@ -90,7 +95,7 @@ static void enqueue_outflow_all(struct chunk *in) {
             dir = axis * 2 + 1; 
             enqueue_outflow_one(in, out, axis, dir);
         } 
-        if (in->pos[axis] < CHUNK_LEN - 1) {
+        if (in->pos[axis] < chunk_dim[axis] - 1) {
             glm_ivec3_copy(in->pos, pos);
             pos[axis]++;
             out = &V3SS(map, pos);
@@ -100,6 +105,7 @@ static void enqueue_outflow_all(struct chunk *in) {
     }
 }
 
+#include <stdio.h>
 static void spread_light(struct chunk *chunk, struct light *old) {
     int face;
     struct light new;
@@ -124,11 +130,11 @@ static void spread_light(struct chunk *chunk, struct light *old) {
                     enqueue_light(chunk, &new);
                 }
             }
-        } else if (in_map(new.pos)) {
+        } else {
             axis = dir / 2;
             other_axes(axis, axes);
-            pos[0] = new.pos[axes[0]] % CHUNK_LEN;
-            pos[1] = new.pos[axes[1]] % CHUNK_LEN;
+            pos[0] = new.pos[axes[0]] & CHUNK_MASK;
+            pos[1] = new.pos[axes[1]] & CHUNK_MASK;
             block = &chunk->outflow[dir][pos[0]][pos[1]];
             if (new.lum > *block) {
                 *block = new.lum;
