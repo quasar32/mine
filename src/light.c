@@ -1,6 +1,8 @@
 #include "light.h"
 #include "map.h"
 #include "misc.h"
+#include "heightmap.h"
+#include "dirty.h"
 
 #include <string.h>
 
@@ -35,43 +37,45 @@ static int dequeue_light(struct chunk *chunk, struct light *light) {
     return 1;
 }
 
-static int get_dir_outbounds(ivec3 pos) {
+static int get_dir_outbounds(ivec3s pos) {
     int axis;
 
     for (axis = 0; axis < 3; axis++) {
-        if (pos[axis] < 0) {
+        if (pos.raw[axis] < 0) {
             return axis * 2;
         }
-        if (pos[axis] >= CHUNK_LEN) {
+        if (pos.raw[axis] >= CHUNK_LEN) {
             return axis * 2 + 1;
         }
     }
     return -1;
 }
 
-static void other_axes(int axis, ivec2 axes) {
-    axes[0] = axis == 0 ? 1 : 0;
-    axes[1] = axis == 2 ? 1 : 2;
+static ivec2s other_axes(int axis) {
+    return (ivec2s) {
+        .x = axis == 0 ? 1 : 0,
+        .y = axis == 2 ? 1 : 2
+    };
 }
 
 static void enqueue_outflow_one(struct chunk *in, 
                                 struct chunk *out,
                                 int axis,
                                 int dir) {
-    int axes[2]; 
+    ivec2s axes; 
     int x, y;
     struct light light;
     uint8_t *lum;
 
     if ((out->old_outflow & (1 << dir))) {
-        other_axes(axis, axes);
+        axes = other_axes(axis);
         for (x = 0; x < CHUNK_LEN; x++) {
             for (y = 0; y < CHUNK_LEN; y++) {
-                light.pos[axis] = dir % 2 ? 0 : CHUNK_LEN - 1;
-                light.pos[axes[0]] = x;
-                light.pos[axes[1]] = y;
+                light.pos.raw[axis] = dir % 2 ? 0 : CHUNK_LEN - 1;
+                light.pos.raw[axes.x] = x;
+                light.pos.raw[axes.y] = y;
                 light.lum = out->outflow[dir][x][y];
-                lum = &V3SS(in->lums, light.pos); 
+                lum = get_local_lum(in, light.pos);
                 if (*lum < light.lum) {
                     *lum = light.lum;
                     enqueue_light(in, &light);
@@ -82,30 +86,29 @@ static void enqueue_outflow_one(struct chunk *in,
 }
 
 static void enqueue_outflow_all(struct chunk *in) {
-    ivec3 pos;
+    ivec3s pos;
     int axis;
     int dir;
     struct chunk *out;
 
     for (axis = 0; axis < 3; axis++) {
-        if (in->pos[axis] > 0) {
-            glm_ivec3_copy(in->pos, pos);
-            pos[axis]--; 
-            out = &V3SS(map, pos);
+        if (in->pos.raw[axis] > 0) {
+            pos = in->pos;
+            pos.raw[axis]--; 
+            out = chunk_pos_to_chunk(pos);
             dir = axis * 2 + 1; 
             enqueue_outflow_one(in, out, axis, dir);
         } 
-        if (in->pos[axis] < chunk_dim[axis] - 1) {
-            glm_ivec3_copy(in->pos, pos);
-            pos[axis]++;
-            out = &V3SS(map, pos);
+        if (in->pos.raw[axis] < nv_chunks.raw[axis] - 1) {
+            pos = in->pos;
+            pos.raw[axis]++;
+            out = chunk_pos_to_chunk(pos);
             dir = axis * 2; 
             enqueue_outflow_one(in, out, axis, dir);
         }
     }
 }
 
-#include <stdio.h>
 static void spread_light(struct chunk *chunk, struct light *old) {
     int face;
     struct light new;
@@ -113,17 +116,17 @@ static void spread_light(struct chunk *chunk, struct light *old) {
     uint8_t *block;
     int dir;
     int axis;
-    ivec2 axes;
-    ivec2 pos;
+    ivec2s axes;
+    ivec2s pos;
 
     for (face = 0; face < 6; face++) {
         new = *old;
-        new.pos[face / 2] -= face_dir(face);
+        new.pos.raw[face / 2] += face_dir(face);
         new.lum--;
         dir = get_dir_outbounds(new.pos);
         if (dir < 0) {
-            block = &V3SS(chunk->blocks, new.pos); 
-            lum = &V3SS(chunk->lums, new.pos); 
+            block = get_local_block(chunk, new.pos); 
+            lum = get_local_lum(chunk, new.pos); 
             if (*lum < new.lum && !*block) {
                 *lum = new.lum;
                 if (new.lum != 0) {
@@ -132,10 +135,10 @@ static void spread_light(struct chunk *chunk, struct light *old) {
             }
         } else {
             axis = dir / 2;
-            other_axes(axis, axes);
-            pos[0] = new.pos[axes[0]] & CHUNK_MASK;
-            pos[1] = new.pos[axes[1]] & CHUNK_MASK;
-            block = &chunk->outflow[dir][pos[0]][pos[1]];
+            axes = other_axes(axis);
+            pos.x = new.pos.raw[axes.x];
+            pos.y = new.pos.raw[axes.y];
+            block = &chunk->outflow[dir][pos.x][pos.y];
             if (new.lum > *block) {
                 *block = new.lum;
                 chunk->new_outflow |= 1 << dir;
@@ -144,28 +147,56 @@ static void spread_light(struct chunk *chunk, struct light *old) {
     }
 }
 
-void gen_lums(void) {
-    int x, y, z;
+void flood_direct_sunlight(struct chunk *chunk) {
+    struct heightmap *heightmap = chunk_to_heightmap(chunk);
+    int chunk_bot = chunk->pos.y * CHUNK_LEN;
+    int chunk_top = chunk_bot + CHUNK_LEN; 
+    for (int x = 0; x < CHUNK_LEN; x++) {
+        for (int z = 0; z < CHUNK_LEN; z++) {
+            int y = heightmap->heights[x][z];
+            if (y < chunk_bot) {
+                y = 0;
+            } else if (y >= chunk_top) {
+                y = CHUNK_LEN;
+            } else {
+                y = y - chunk_bot + 1;
+            }
+            for (; y < CHUNK_LEN; y++) {
+                chunk->lums[x][y][z] = 15;
+            }
+        }
+    }
+    chunk->new_outflow = 63;
+}
+
+void world_gen_lums(void) {
+    int x, z;
     struct light light;
     struct chunk *chunk;
     int i;
     int outflow;
+    struct heightmap *heightmap;
+    int chunk_min_y;
+    int chunk_max_y;
+    int height;
+    struct dirty *dirty;
 
-    for (i = 0; i < n_dirty_chunks; i++) {
-        chunk = dirty_chunks[i];
+    dirty = &dirties[DIRTY_LUMS];
+    for (i = 0; i < dirty->n_chunks; i++) {
+        chunk = dirty->chunks[i];
+        heightmap = &heightmaps[chunk->pos.x][chunk->pos.z];
+        chunk_min_y = chunk->pos.y * CHUNK_LEN;
+        chunk_max_y = chunk_min_y + CHUNK_LEN; 
         for (x = 0; x < CHUNK_LEN; x++) {
             for (z = 0; z < CHUNK_LEN; z++) {
-                chunk->heightmap[x][z] = 0;
-                for (y = 0; y < CHUNK_LEN; y++) {
-                    if (chunk->blocks[x][y][z]) {
-                        chunk->heightmap[x][z] = y;
-                    }
+                height = heightmap->heights[x][z];
+                if (height >= chunk_min_y && height < chunk_max_y) {
+                    light.pos.x = x;
+                    light.pos.y = height - chunk_min_y + 1;
+                    light.pos.z = z;
+                    light.lum = 15;
+                    enqueue_light(chunk, &light);
                 }
-                light.pos[0] = x;
-                light.pos[1] = chunk->heightmap[x][z] + 1;
-                light.pos[2] = z;
-                light.lum = 15;
-                enqueue_light(chunk, &light);
             }
         }
         memset(chunk->lums, 0, sizeof(chunk->lums));
@@ -175,13 +206,13 @@ void gen_lums(void) {
     }
     do {
         outflow = 0;
-        for (i = 0; i < n_dirty_chunks; i++) {
-            chunk = dirty_chunks[i];
+        for (i = 0; i < dirty->n_chunks; i++) {
+            chunk = dirty->chunks[i];
             chunk->old_outflow = chunk->new_outflow;
             chunk->new_outflow = 0;
         }
-        for (i = 0; i < n_dirty_chunks; i++) {
-            chunk = dirty_chunks[i];
+        for (i = 0; i < dirty->n_chunks; i++) {
+            chunk = dirty->chunks[i];
             enqueue_outflow_all(chunk);
             while (dequeue_light(chunk, &light)) {
                 spread_light(chunk, &light);
@@ -189,16 +220,5 @@ void gen_lums(void) {
             outflow |= chunk->new_outflow;
         }
     } while (outflow);
-    for (i = 0; i < n_dirty_chunks; i++) {
-        chunk = dirty_chunks[i];
-        for (x = 0; x < CHUNK_LEN; x++) {
-            for (z = 0; z < CHUNK_LEN; z++) {
-                y = CHUNK_LEN;
-                while (--y > chunk->heightmap[x][z]) {
-                    chunk->lums[x][y][z] = 15;
-                }
-            }
-        }
-        chunk->new_outflow = 63;
-    }
+    clear_dirty_all(DIRTY_LUMS, flood_direct_sunlight);
 }

@@ -1,3 +1,3 @@
 #pragma once
 
-void gen_lums(void);
+void world_gen_lums(void);

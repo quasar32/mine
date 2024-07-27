@@ -1,6 +1,7 @@
 def Settings( **kwargs ):
   return {
     'flags': [
+        '-Isrc/',
         '-Ilib/glad/include', 
         '-Ilib/stb', 
         '-Ilib/glfw/include', 

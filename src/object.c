@@ -6,26 +6,21 @@
 #include <math.h>
 #include <GLFW/glfw3.h>
 
-#define V3_FOR(pos, min, max) \
-    for (pos[0] = min[0]; pos[0] < max[0]; pos[0]++) \
-        for (pos[1] = min[1]; pos[1] < max[1]; pos[1]++) \
-            for (pos[2] = min[2]; pos[2] < max[2]; pos[2]++) 
-
 static double t0;
 
 struct object player = {
     .type = OBJ_PLAYER,
-    .pos = {8.0F, 16.0F, 8.0F}
+    .pos = {.x = 8.0F, .y = 64.0F, .z = 8.0F}
 };
 
 struct prism locals[] = {
     [OBJ_PLAYER] = {
-        {-0.3F, 0.0F, -0.3F},
-        {0.3F, 1.8F, 0.3F} 
+        {.x = -0.3F, .z = -0.3F},
+        {.x = 0.3F, .y = 1.8F, .z = 0.3F} 
     },
     [OBJ_ITEM] = {
-        {-0.25F, -0.25F, -0.25F},
-        {0.25F, 0.25F, 0.25F},
+        {.x = -0.25F, .y = -0.25F, .z = -0.25F},
+        {.x = 0.25F, .y = 0.25F, .z = 0.25F},
     }
 };
 
@@ -34,12 +29,10 @@ float dt;
 struct object items[BLOCKS_IN_WORLD];
 int n_items;
 
-static void get_detect_bounds(struct prism *prism, ivec3 min, ivec3 max) {
-    int i;
-
-    for (i = 0; i < 3; i++) {
-        min[i] = floorf(prism->min[i] + 0.5F);
-        max[i] = ceilf(prism->max[i] + 0.5F);
+static void get_detect_bounds(struct prism *prism, struct bounds *bounds) {
+    for (int i = 0; i < 3; i++) {
+        bounds->min.raw[i] = floorf(prism->min.raw[i] + 0.5F);
+        bounds->max.raw[i] = ceilf(prism->max.raw[i] + 0.5F);
     }
 }
 
@@ -60,36 +53,36 @@ static void player_item_col(struct prism *disp) {
 
 static void get_disp_prism(struct object *obj, struct prism *disp, int axis) {
     get_world_prism(disp, obj);
-    if (obj->vel[axis] < 0.0F) {
-        disp->max[axis] = disp->min[axis];
-        disp->min[axis] += obj->vel[axis] * dt;
+    if (obj->vel.raw[axis] < 0.0F) {
+        disp->max.raw[axis] = disp->min.raw[axis];
+        disp->min.raw[axis] += obj->vel.raw[axis] * dt;
     } else {
-        disp->min[axis] = disp->max[axis];
-        disp->max[axis] += obj->vel[axis] * dt;
+        disp->min.raw[axis] = disp->max.raw[axis];
+        disp->max.raw[axis] += obj->vel.raw[axis] * dt;
     }
 }
 
 int prism_collide(struct prism *a, struct prism *b) {
-    return a->max[0] > b->min[0] && b->max[0] > a->min[0] &&
-           a->max[1] > b->min[1] && b->max[1] > a->min[1] &&
-           a->max[2] > b->min[2] && b->max[2] > a->min[2];
+    return a->max.x > b->min.x && b->max.x > a->min.x &&
+           a->max.y > b->min.y && b->max.y > a->min.y &&
+           a->max.z > b->min.z && b->max.z > a->min.z;
 }
 
-void get_block_prism(struct prism *prism, ivec3 pos) {
-    int i;
-
-    for (i = 0; i < 3; i++) {
-        prism->min[i] = pos[i] - 0.5F;
-        prism->max[i] = pos[i] + 0.5F;
-    }
+void get_block_prism(struct prism *prism, ivec3s pos) {
+    prism->min.x = pos.x - 0.5F;
+    prism->max.x = pos.x + 0.5F;
+    prism->min.y = pos.y - 0.5F;
+    prism->max.y = pos.y + 0.5F;
+    prism->min.z = pos.z - 0.5F;
+    prism->max.z = pos.z + 0.5F;
 }
 
 void get_world_prism(struct prism *world, struct object *obj) {
     struct prism *local;
     
     local = locals + obj->type;
-    glm_vec3_add(obj->pos, local->min, world->min);
-    glm_vec3_add(obj->pos, local->max, world->max);
+    world->min = glms_vec3_add(obj->pos, local->min);
+    world->max = glms_vec3_add(obj->pos, local->max);
 }
 
 void update_dt(void) {
@@ -103,7 +96,8 @@ void update_dt(void) {
 void move(struct object *obj) {
     struct prism disp, block;
     struct prism *local;
-    ivec3 pos, min, max;
+    struct bounds bounds;
+    ivec3s pos;
     float *blockf, *dispf, *posf, *velf;
     float (*sel)(float, float);
     float localf, off;
@@ -113,31 +107,31 @@ void move(struct object *obj) {
     local = locals + obj->type;
     if (obj->flags & STUCK) {
         for (axis = 0; axis < 3; axis++) {
-            velf = obj->vel + axis;
+            velf = obj->vel.raw + axis;
             if (*velf == 0.0F) {
                 continue;
             }
             get_disp_prism(obj, &disp, axis);
-            get_detect_bounds(&disp, min, max);
-            posf = obj->pos + axis;
+            get_detect_bounds(&disp, &bounds);
+            posf = obj->pos.raw + axis;
             if (*velf < 0.0F) {
-                dispf = disp.min + axis;
-                localf = local->min[axis];
+                dispf = disp.min.raw + axis;
+                localf = local->min.raw[axis];
                 off = 0.5F + localf * 2;
-                blockf = block.max + axis;
+                blockf = block.max.raw + axis;
                 sel = fmaxf;
             } else {
-                dispf = disp.max + axis;
-                localf = local->max[axis];
+                dispf = disp.max.raw + axis;
+                localf = local->max.raw[axis];
                 off = -0.5F + localf * 2;
-                blockf = block.min + axis;
+                blockf = block.min.raw + axis;
                 sel = fminf;
             }
             cols = 0;
-            V3_FOR (pos, min, max) {
+            FOR_BOUNDS (pos, bounds) {
                 if (!get_block_or(pos, 0)) {
                     get_block_prism(&block, pos);
-                    *blockf = pos[axis] + off;
+                    *blockf = pos.raw[axis] + off;
                     if (prism_collide(&disp, &block)) {
                         *dispf = sel(*blockf, *dispf);
                         cols = 1;
@@ -153,28 +147,28 @@ void move(struct object *obj) {
     }
     if (!(obj->flags & STUCK)) {
         for (axis = 0; axis < 3; axis++) {
-            velf = obj->vel + axis;
+            velf = obj->vel.raw + axis;
             if (*velf == 0.0F) {
                 continue;
             }
             get_disp_prism(obj, &disp, axis);
-            get_detect_bounds(&disp, min, max);
-            posf = obj->pos + axis;
+            get_detect_bounds(&disp, &bounds);
+            posf = obj->pos.raw + axis;
             if (*velf < 0.0F) {
-                dispf = disp.min + axis;
-                localf = local->min[axis];
+                dispf = disp.min.raw + axis;
+                localf = local->min.raw[axis];
                 off = 0.5F;
                 sel = fmaxf;
             } else {
-                dispf = disp.max + axis;
-                localf = local->max[axis];
+                dispf = disp.max.raw + axis;
+                localf = local->max.raw[axis];
                 off = -0.5F;
                 sel = fminf;
             }
             cols = 0;
-            V3_FOR (pos, min, max) {
+            FOR_BOUNDS (pos, bounds) {
                 if (get_block_or(pos, 0)) {
-                    *dispf = sel(pos[axis] + off, *dispf);
+                    *dispf = sel(pos.raw[axis] + off, *dispf);
                     cols = 1;
                 }
             }
@@ -189,6 +183,6 @@ void move(struct object *obj) {
             }
             *posf = *dispf - localf;
         }
-        obj->vel[1] = fmaxf(obj->vel[1] - 24.0F * dt, -64.0F);
+        obj->vel.y = fmaxf(obj->vel.y - 24.0F * dt, -64.0F);
     }
 }
