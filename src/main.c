@@ -1,3 +1,4 @@
+#define CGLM_OMIT_NS_FROM_STRUCT_API
 #include <cglm/struct.h>
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -43,6 +44,7 @@
 
 #define MAX_DIGS (CHAR_BIT * sizeof(int)) 
 
+#define CGLM_OMIT_NS_FROM_STRUCT_API
 #include <cglm/struct.h>
 
 static uint32_t cube_indices[] = {
@@ -336,7 +338,7 @@ static void update_cam_dirs(void) {
     forw.x = cosf(yaw);
     forw.y = 0.0F;
     forw.z = sinf(yaw);
-    right = glms_cross(forw, up);
+    right = vec3_cross(forw, up);
 }
 
 static float get_air_lum(ivec3s pos) {
@@ -345,6 +347,10 @@ static float get_air_lum(ivec3s pos) {
     lum = get_lum(pos);
     return lum ? (*lum + 1) / 16.0F : 1.0F;
 }
+
+static struct vertex chunk_vertices[VERTICES_IN_CHUNK];
+static uint32_t chunk_indices[INDICES_IN_CHUNK];
+static int chunk_n_vertices;
 
 static float get_face_lum(ivec3s pos, int face) {
     ivec3s empty = pos;
@@ -374,35 +380,35 @@ static void block_gen_vertices(struct chunk *chunk, ivec3s local_pos) {
         if (!(*face & (1 << dir))) {
             continue;
         }
-        indices = &chunk->indices[chunk->n_indices];
-        indices[0] = chunk->n_vertices;
-        indices[1] = chunk->n_vertices + 1;
-        indices[2] = chunk->n_vertices + 2;
-        indices[3] = chunk->n_vertices + 2; 
-        indices[4] = chunk->n_vertices + 3;
-        indices[5] = chunk->n_vertices;
+        indices = &chunk_indices[chunk->n_indices];
+        indices[0] = chunk_n_vertices;
+        indices[1] = chunk_n_vertices + 1;
+        indices[2] = chunk_n_vertices + 2;
+        indices[3] = chunk_n_vertices + 2; 
+        indices[4] = chunk_n_vertices + 3;
+        indices[5] = chunk_n_vertices;
         chunk->n_indices += 6; 
-        dst = &chunk->vertices[chunk->n_vertices];
+        dst = &chunk_vertices[chunk_n_vertices];
         for (corner = 0; corner < 4; corner++) {
             src = &cube_vertices[dir * 4 + corner];
-            dst->xyz = glms_vec3_add(src->xyz, block_pos); 
-            dst->uv = glms_vec2_scale(src->uv, 0.999F);
-            dst->uv = glms_vec2_add(dst->uv, block_uvs[*block][dir]);
-            dst->uv = glms_vec2_divs(dst->uv, 16.0F);
+            dst->xyz = vec3_add(src->xyz, block_pos); 
+            dst->uv = vec2_scale(src->uv, 0.999F);
+            dst->uv = vec2_add(dst->uv, block_uvs[*block][dir]);
+            dst->uv = vec2_divs(dst->uv, 16.0F);
             dst->lum = get_face_lum(world_pos, dir);
             if (block == block_itc) {
                 dst->lum *= 1.2F;
             }
             dst++;
         }
-        chunk->n_vertices += 4;
+        chunk_n_vertices += 4;
     }
 }
 
 static void chunk_gen_vertices(struct chunk *chunk) {
     ivec3s pos;
 
-    chunk->n_vertices = 0;
+    chunk_n_vertices = 0;
     chunk->n_indices = 0;
     FOR_LOCAL_POS (pos) {
         block_gen_vertices(chunk, pos);
@@ -410,12 +416,12 @@ static void chunk_gen_vertices(struct chunk *chunk) {
     glBindVertexArray(chunk->vao);
     glBindBuffer(GL_ARRAY_BUFFER, chunk->vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
-            chunk->n_vertices * sizeof(*chunk->vertices), 
-            chunk->vertices);
+            chunk_n_vertices * sizeof(*chunk_vertices), 
+            chunk_vertices);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, chunk->ebo);
     glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
-            chunk->n_indices * sizeof(*chunk->indices),
-            chunk->indices);
+            chunk->n_indices * sizeof(*chunk_indices),
+            chunk_indices);
 }
 
 static void world_gen_vertices(void) {
@@ -432,9 +438,9 @@ static void gen_chunk(ivec3s pos) {
     for (x = 0; x < CHUNK_LEN; x++) {
         for (y = 0; y < CHUNK_LEN; y++) {
             for (z = 0; z < CHUNK_LEN; z++) {
-                nx = x / (float) CHUNK_LEN + c->pos.x;
+                nx = (x / (float) CHUNK_LEN + c->pos.x);
                 ny = y / (float) CHUNK_LEN + c->pos.y;
-                nz = z / (float) CHUNK_LEN + c->pos.z;
+                nz = (z / (float) CHUNK_LEN + c->pos.z);
                 if ((c->pos.y == 0 && y == 0) || noise3(nx, ny, nz) > 0) {
                     c->blocks[x][y][z] = STONE;
                 }
@@ -488,10 +494,10 @@ static void gen_items_vertices(void) {
             z = v->xyz.z;
             v->xyz.x = x * c - z * s; 
             v->xyz.z = x * s + z * c;
-            v->xyz = glms_vec3_divs(v->xyz, 4.0F);
-            v->xyz = glms_vec3_add(v->xyz, items[i].pos);
-            v->uv = glms_vec2_add(v->uv, uv[j / 4]);
-            v->uv = glms_vec2_divs(v->uv, 16.0F);
+            v->xyz = vec3_divs(v->xyz, 4.0F);
+            v->xyz = vec3_add(v->xyz, items[i].pos);
+            v->uv = vec2_add(v->uv, uv[j / 4]);
+            v->uv = vec2_divs(v->uv, 16.0F);
             v->lum = face_lums[j / 4] * light;
         }
         items[i].rot += dt;
@@ -546,7 +552,7 @@ static void find_block_itc(void) {
         }
     } 
     v = ivec3s_to_vec3s(pos_itc);
-    if (glms_vec3_distance2(v, eye) > 25.0F) {
+    if (vec3_distance2(v, eye) > 25.0F) {
         block_itc = NULL;
     } 
     if (block_itc != old_block) {
@@ -616,7 +622,7 @@ static void remove_block(void) {
     item->type = OBJ_ITEM;
     item->flags = 0;
     item->pos = ivec3s_to_vec3s(pos_itc);
-    item->vel = glms_vec3_zero();
+    item->vel = vec3_zero();
     item->id = *block_itc;
     item->rot = 0.0F;
     *block_itc = 0;
@@ -629,8 +635,8 @@ static void add_square(vec2s uv, float div, vec2s xy, float scale, float lum) {
 
     for (i = 0; i < 6; i++) { 
         v = vertices + n_vertices++;
-        v->uv = glms_vec2_add(uv, square[i].uv);
-        v->uv = glms_vec2_divs(v->uv, div);
+        v->uv = vec2_add(uv, square[i].uv);
+        v->uv = vec2_divs(v->uv, div);
         v->xyz.x = square[i].xyz.x * scale + xy.x;
         v->xyz.y = square[i].xyz.y * scale + xy.y;
         v->xyz.z = 0.0F;
@@ -767,23 +773,29 @@ static void enable_attrib(int i, int n, size_t stride, size_t offset) {
 }
 
 static void move_player(void) {
-    player.vel.x = 0.0F;
-    player.vel.z = 0.0F;
+    vec2s horz = {};
     if (glfwGetKey(wnd, GLFW_KEY_W)) {
-        player.vel = glms_vec3_muladds(forw, 5.0F, player.vel);
+        horz.x += forw.x;
+        horz.y += forw.z;
     } 
     if (glfwGetKey(wnd, GLFW_KEY_S)) {
-        player.vel = glms_vec3_mulsubs(forw, 5.0F, player.vel);
+        horz.x -= forw.x;
+        horz.y -= forw.z;
     }
     if (glfwGetKey(wnd, GLFW_KEY_A)) {
-        player.vel = glms_vec3_mulsubs(right, 5.0F, player.vel);
+        horz.x -= right.x;
+        horz.y -= right.z;
     } 
     if (glfwGetKey(wnd, GLFW_KEY_D)) {
-        player.vel = glms_vec3_muladds(right, 5.0F, player.vel);
+        horz.x += right.x;
+        horz.y += right.z;
     }
+    horz = vec2_normalize(horz);
+    player.vel.x = horz.x * 5.0F;
+    player.vel.z = horz.y * 5.0F;
     if (glfwGetKey(wnd, GLFW_KEY_SPACE) && 
             (player.flags & GROUNDED)) {
-        player.vel = glms_vec3_muladds(up, 8.0F, player.vel);
+        player.vel = vec3_muladds(up, 8.0F, player.vel);
     }
     move(&player);
 }
@@ -826,16 +838,28 @@ static void update_block_itc(void) {
     }
 }
 
+static int chunk_in_view(ivec3s chunk_pos) {
+    ivec3s world_pos = chunk_to_world_pos(chunk_pos);
+    vec3s fworld_pos = ivec3s_to_vec3s(world_pos);
+    vec3s far_pos = vec3_muladds(front, CHUNK_LEN * 2.75F, fworld_pos);
+    vec3s cam_pos = vec3_sub(far_pos, eye);
+    vec3s cam_norm = vec3_normalize(cam_pos);
+    float cam_cos = vec3_dot(cam_norm, front);
+    return cam_cos >= 0.7F;
+}
+
 static void draw_map(void) {
     ivec3s pos;
     struct chunk *chunk;
 
     FOR_CHUNK (pos, chunk) {
-        glBindVertexArray(chunk->vao);
-        glDrawElements(GL_TRIANGLES, 
-                       chunk->n_indices, 
-                       GL_UNSIGNED_INT, 
-                       NULL);
+        if (chunk_in_view(pos)) {
+            glBindVertexArray(chunk->vao);
+            glDrawElements(GL_TRIANGLES, 
+                           chunk->n_indices, 
+                           GL_UNSIGNED_INT, 
+                           NULL);
+        }
     }
 }
 
@@ -966,9 +990,9 @@ int main(void) {
         glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         proj = glms_perspective_default(width / (float) height);
-        center = glms_vec3_add(eye, front);
+        center = vec3_add(eye, front);
         view = glms_lookat(eye, center, up);
-        world = glms_mat4_mul(proj, view);
+        world = mat4_mul(proj, view);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
         glUseProgram(block_prog);
@@ -989,7 +1013,7 @@ int main(void) {
         aspect.x = (float) height / width;
         aspect.y = 1.0F;
         aspect.z = 1.0F;
-        aspect = glms_vec3_divs(aspect, 8.0F);
+        aspect = vec3_divs(aspect, 8.0F);
         world = glms_scale_make(aspect);
         gen_hotbar_vertices();
         glEnable(GL_BLEND);

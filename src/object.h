@@ -1,7 +1,9 @@
 #ifndef OBJECT_H
 #define OBJECT_H
 
+#define CGLM_OMIT_NS_FROM_STRUCT_API
 #include <cglm/struct.h>
+#define CGLM_OMIT_NS_FROM_STRUCT_API
 #include <cglm/struct.h>
 
 #define OBJ_PLAYER 0

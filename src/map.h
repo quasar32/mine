@@ -3,13 +3,14 @@
 #include "render.h"
 #include <assert.h>
 #include <stdint.h>
+#define CGLM_OMIT_NS_FROM_STRUCT_API
 #include <cglm/struct.h>
 
 #define CHUNK_LEN 16 
 
-#define NX_CHUNKS 4
-#define NY_CHUNKS 4
-#define NZ_CHUNKS 4
+#define NX_CHUNKS 16
+#define NY_CHUNKS 1
+#define NZ_CHUNKS 16
 
 #define NX_BLOCKS (NX_CHUNKS * CHUNK_LEN)
 #define NY_BLOCKS (NY_CHUNKS * CHUNK_LEN)
@@ -87,9 +88,6 @@ struct chunk {
     struct light lights[MAX_LIGHTS];
     struct light *head_light;
     struct light *tail_light;
-    struct vertex vertices[VERTICES_IN_CHUNK];
-    uint32_t indices[INDICES_IN_CHUNK];
-    int n_vertices;
     int n_indices;
     uint32_t vao;
     uint32_t vbo;
@@ -131,7 +129,7 @@ static inline ivec3s world_to_local_pos(ivec3s pos) {
 
 static inline ivec3s world_to_chunk_pos(ivec3s pos) {
     assert(world_pos_in_world(pos));
-    return glms_ivec3_divs(pos, CHUNK_LEN);
+    return ivec3_divs(pos, CHUNK_LEN);
 }
 
 static inline struct chunk *world_pos_to_chunk(ivec3s pos) {
@@ -139,9 +137,9 @@ static inline struct chunk *world_pos_to_chunk(ivec3s pos) {
 }
 
 static inline ivec3s chunk_to_world_pos(ivec3s pos) {
-    return glms_ivec3_scale(pos, CHUNK_LEN);
+    return ivec3_scale(pos, CHUNK_LEN);
 }
 
 static inline ivec3s local_to_world_pos(ivec3s local_pos, ivec3s chunk_pos) {
-    return glms_ivec3_add(local_pos, chunk_to_world_pos(chunk_pos));
+    return ivec3_add(local_pos, chunk_to_world_pos(chunk_pos));
 }

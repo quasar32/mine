@@ -81,8 +81,8 @@ void get_world_prism(struct prism *world, struct object *obj) {
     struct prism *local;
     
     local = locals + obj->type;
-    world->min = glms_vec3_add(obj->pos, local->min);
-    world->max = glms_vec3_add(obj->pos, local->max);
+    world->min = vec3_add(obj->pos, local->min);
+    world->max = vec3_add(obj->pos, local->max);
 }
 
 void update_dt(void) {

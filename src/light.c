@@ -159,7 +159,7 @@ void flood_direct_sunlight(struct chunk *chunk) {
             } else if (y >= chunk_top) {
                 y = CHUNK_LEN;
             } else {
-                y = y - chunk_bot + 1;
+                y = y - chunk_bot;
             }
             for (; y < CHUNK_LEN; y++) {
                 chunk->lums[x][y][z] = 15;
@@ -170,7 +170,7 @@ void flood_direct_sunlight(struct chunk *chunk) {
 }
 
 void world_gen_lums(void) {
-    int x, z;
+    int x, y, z;
     struct light light;
     struct chunk *chunk;
     int i;
@@ -190,9 +190,9 @@ void world_gen_lums(void) {
         for (x = 0; x < CHUNK_LEN; x++) {
             for (z = 0; z < CHUNK_LEN; z++) {
                 height = heightmap->heights[x][z];
-                if (height >= chunk_min_y && height < chunk_max_y) {
+                for (y = height; y < chunk_max_y; y++) {
                     light.pos.x = x;
-                    light.pos.y = height - chunk_min_y + 1;
+                    light.pos.y = y - chunk_min_y;
                     light.pos.z = z;
                     light.lum = 15;
                     enqueue_light(chunk, &light);
