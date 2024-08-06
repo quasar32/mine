@@ -8,9 +8,9 @@
 
 #define CHUNK_LEN 16 
 
-#define NX_CHUNKS 16
-#define NY_CHUNKS 1
-#define NZ_CHUNKS 16
+#define NX_CHUNKS 4
+#define NY_CHUNKS 4
+#define NZ_CHUNKS 4
 
 #define NX_BLOCKS (NX_CHUNKS * CHUNK_LEN)
 #define NY_BLOCKS (NY_CHUNKS * CHUNK_LEN)
@@ -25,10 +25,12 @@
 #define GRASS 2
 #define STONE 3
 
-#define MAX_LIGHTS (BLOCKS_IN_CHUNK * 2)
+#define MAX_LIGHTS (BLOCKS_IN_CHUNK * 4)
 
 #define VERTICES_IN_CHUNK (24 * BLOCKS_IN_CHUNK) 
 #define INDICES_IN_CHUNK (36 * BLOCKS_IN_CHUNK) 
+
+#define CHUNK_MASK 15
 
 #define FOR_LOCAL_POS(pos) \
     for (pos.x = 0; pos.x < CHUNK_LEN; pos.x++) \
@@ -88,6 +90,9 @@ struct chunk {
     struct light lights[MAX_LIGHTS];
     struct light *head_light;
     struct light *tail_light;
+    struct vertex vertices[VERTICES_IN_CHUNK];
+    uint32_t indices[INDICES_IN_CHUNK];
+    int n_vertices;
     int n_indices;
     uint32_t vao;
     uint32_t vbo;

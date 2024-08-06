@@ -5,6 +5,9 @@
 #include "dirty.h"
 
 #include <string.h>
+#include <stdatomic.h>
+
+static atomic_uint world_outflow;
 
 static void next_light(struct chunk *chunk, struct light **light) {
     ++*light;    
@@ -37,20 +40,6 @@ static int dequeue_light(struct chunk *chunk, struct light *light) {
     return 1;
 }
 
-static int get_dir_outbounds(ivec3s pos) {
-    int axis;
-
-    for (axis = 0; axis < 3; axis++) {
-        if (pos.raw[axis] < 0) {
-            return axis * 2;
-        }
-        if (pos.raw[axis] >= CHUNK_LEN) {
-            return axis * 2 + 1;
-        }
-    }
-    return -1;
-}
-
 static ivec2s other_axes(int axis) {
     return (ivec2s) {
         .x = axis == 0 ? 1 : 0,
@@ -74,14 +63,16 @@ static void enqueue_outflow_one(struct chunk *in,
                 light.pos.raw[axis] = dir % 2 ? 0 : CHUNK_LEN - 1;
                 light.pos.raw[axes.x] = x;
                 light.pos.raw[axes.y] = y;
-                light.lum = out->outflow[dir][x][y];
-                lum = get_local_lum(in, light.pos);
-                if (*lum < light.lum) {
-                    *lum = light.lum;
-                    enqueue_light(in, &light);
+                if (!*get_local_block(in, light.pos)) {
+                    light.lum = out->outflow[dir][x][y];
+                    lum = get_local_lum(in, light.pos);
+                    if (*lum < light.lum) {
+                        *lum = light.lum;
+                        enqueue_light(in, &light);
+                    }
                 }
             }
-        } 
+        }
     }
 }
 
@@ -110,7 +101,6 @@ static void enqueue_outflow_all(struct chunk *in) {
 }
 
 static void spread_light(struct chunk *chunk, struct light *old) {
-    int face;
     struct light new;
     uint8_t *lum;
     uint8_t *block;
@@ -119,12 +109,12 @@ static void spread_light(struct chunk *chunk, struct light *old) {
     ivec2s axes;
     ivec2s pos;
 
-    for (face = 0; face < 6; face++) {
+    for (dir = 0; dir < 6; dir++) {
         new = *old;
-        new.pos.raw[face / 2] += face_dir(face);
+        axis = dir / 2;
+        new.pos.raw[axis] += face_dir(dir);
         new.lum--;
-        dir = get_dir_outbounds(new.pos);
-        if (dir < 0) {
+        if (local_pos_in_chunk(new.pos)) {
             block = get_local_block(chunk, new.pos); 
             lum = get_local_lum(chunk, new.pos); 
             if (*lum < new.lum && !*block) {
@@ -134,7 +124,6 @@ static void spread_light(struct chunk *chunk, struct light *old) {
                 }
             }
         } else {
-            axis = dir / 2;
             axes = other_axes(axis);
             pos.x = new.pos.raw[axes.x];
             pos.y = new.pos.raw[axes.y];
@@ -153,72 +142,74 @@ void flood_direct_sunlight(struct chunk *chunk) {
     int chunk_top = chunk_bot + CHUNK_LEN; 
     for (int x = 0; x < CHUNK_LEN; x++) {
         for (int z = 0; z < CHUNK_LEN; z++) {
-            int y = heightmap->heights[x][z];
-            if (y < chunk_bot) {
-                y = 0;
-            } else if (y >= chunk_top) {
-                y = CHUNK_LEN;
+            int y0 = heightmap->heights[x][z];
+            if (y0 < chunk_bot) {
+                y0 = 0;
+            } else if (y0 >= chunk_top) {
+                y0 = CHUNK_LEN;
             } else {
-                y = y - chunk_bot;
+                y0 -= chunk_bot;
+            }
+            int y = 0;
+            for (; y < y0; y++) {
+                chunk->lums[x][y][z] = 0;
             }
             for (; y < CHUNK_LEN; y++) {
                 chunk->lums[x][y][z] = 15;
             }
         }
     }
-    chunk->new_outflow = 63;
+}
+
+static void set_all_outflow(struct chunk *chunk) {
+    chunk->old_outflow = 63;
+}
+
+static void enqueue_indirect_sunlight(struct chunk *chunk) {
+    struct heightmap *hm = &heightmaps[chunk->pos.x][chunk->pos.z];
+    int chunk_min_y = chunk->pos.y * CHUNK_LEN;
+    for (int x = 0; x < CHUNK_LEN; x++) {
+        for (int z = 0; z < CHUNK_LEN; z++) {
+            int y = imax(hm->heights[x][z] - chunk_min_y, 0);
+            for (; y < CHUNK_LEN; y++) {
+                struct light light = {
+                    .pos = {{x, y, z}},
+                    .lum = 15
+                };
+                enqueue_light(chunk, &light);
+            }
+        }
+    }
+}
+
+static void clear_outflow(struct chunk *chunk) {
+    memset(chunk->outflow, 0, sizeof(chunk->outflow));
+    chunk->old_outflow = 0;
+    chunk->new_outflow = 0;
+}
+
+static void setup_lights(struct chunk *chunk) {
+    flood_direct_sunlight(chunk);
+    enqueue_indirect_sunlight(chunk);
+    clear_outflow(chunk);
+}
+
+static void flood_light(struct chunk *chunk) {
+    struct light light;
+    while (dequeue_light(chunk, &light)) {
+        spread_light(chunk, &light);
+    }
+    chunk->old_outflow = chunk->new_outflow; 
+    chunk->new_outflow = 0;
+    world_outflow |= chunk->old_outflow;
 }
 
 void world_gen_lums(void) {
-    int x, y, z;
-    struct light light;
-    struct chunk *chunk;
-    int i;
-    int outflow;
-    struct heightmap *heightmap;
-    int chunk_min_y;
-    int chunk_max_y;
-    int height;
-    struct dirty *dirty;
-
-    dirty = &dirties[DIRTY_LUMS];
-    for (i = 0; i < dirty->n_chunks; i++) {
-        chunk = dirty->chunks[i];
-        heightmap = &heightmaps[chunk->pos.x][chunk->pos.z];
-        chunk_min_y = chunk->pos.y * CHUNK_LEN;
-        chunk_max_y = chunk_min_y + CHUNK_LEN; 
-        for (x = 0; x < CHUNK_LEN; x++) {
-            for (z = 0; z < CHUNK_LEN; z++) {
-                height = heightmap->heights[x][z];
-                for (y = height; y < chunk_max_y; y++) {
-                    light.pos.x = x;
-                    light.pos.y = y - chunk_min_y;
-                    light.pos.z = z;
-                    light.lum = 15;
-                    enqueue_light(chunk, &light);
-                }
-            }
-        }
-        memset(chunk->lums, 0, sizeof(chunk->lums));
-        memset(chunk->outflow, 0, sizeof(chunk->outflow));
-        chunk->old_outflow = 0;
-        chunk->new_outflow = 0;
-    }
+    do_dirty_jobs(DIRTY_LUMS, setup_lights);
     do {
-        outflow = 0;
-        for (i = 0; i < dirty->n_chunks; i++) {
-            chunk = dirty->chunks[i];
-            chunk->old_outflow = chunk->new_outflow;
-            chunk->new_outflow = 0;
-        }
-        for (i = 0; i < dirty->n_chunks; i++) {
-            chunk = dirty->chunks[i];
-            enqueue_outflow_all(chunk);
-            while (dequeue_light(chunk, &light)) {
-                spread_light(chunk, &light);
-            }
-            outflow |= chunk->new_outflow;
-        }
-    } while (outflow);
-    clear_dirty_all(DIRTY_LUMS, flood_direct_sunlight);
+        do_dirty_jobs(DIRTY_LUMS, enqueue_outflow_all);
+        world_outflow = 0;
+        do_dirty_jobs(DIRTY_LUMS, flood_light);
+    } while (world_outflow);
+    clear_dirty_all(DIRTY_LUMS, set_all_outflow);
 }

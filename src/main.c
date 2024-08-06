@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,7 @@
 #include "dirty.h"
 #include "heightmap.h"
 #include "face.h"
+#include "jobq.h"
 
 #define MAX_PITCH (GLM_PI_2f - 0.01F)
 #define MIN_PITCH (-MAX_PITCH)
@@ -39,8 +41,8 @@
 #define EBO_CROSSHAIR 3
 #define NUM_BOS       4 
 
-#define ENABLE_ATTRIB(i, n, type, member) enable_attrib(i, n, \
-        sizeof(type), offsetof(type, member))
+#define ENABLE_ATTRIB(i, n, type, member) \
+    enable_attrib(i, n, sizeof(type), offsetof(type, member))
 
 #define MAX_DIGS (CHAR_BIT * sizeof(int)) 
 
@@ -174,11 +176,7 @@ static int held_left;
 static int held_right;
 static GLFWwindow *wnd;
 
-static unsigned block_prog, crosshair_prog;
 static unsigned vaos[NUM_VAOS], bos[NUM_BOS];
-static int world_loc;
-static int tex_loc;
-static int proj_loc;
 
 static vec3s ivec3s_to_vec3s(ivec3s v) {
     return (vec3s) {{v.x, v.y, v.z}};
@@ -218,6 +216,17 @@ static char *read_all_str(const char *path) {
     return buf;
 }
 
+static char *xasprintf(char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char *buf;
+    if (vasprintf(&buf, fmt, ap) < 0) {
+        die("xasprintf err\n");
+    }
+    va_end(ap);
+    return buf;
+}
+
 static unsigned load_shader(GLenum type, const char *path) {
     unsigned shader;
     int status;
@@ -225,13 +234,11 @@ static unsigned load_shader(GLenum type, const char *path) {
     const char *src;
     char *full;
 
-    if (asprintf(&full, "shader/%s", path) < 0) {
-        die("asprintf oom\n");
-    }
+    full = xasprintf("shader/%s", path);
     src = read_all_str(full);
     free(full);
     if (!src) {
-        die("load_shader: %s\n", strerror(errno));
+        die("load_shader(%s): %s\n", path, strerror(errno));
     }
     shader = glCreateShader(type); 
     glShaderSource(shader, 1, &src, NULL);
@@ -245,8 +252,8 @@ static unsigned load_shader(GLenum type, const char *path) {
     return shader;
 }
 
-static unsigned load_prog(const char *vs_path, const char *fs_path) {
-    unsigned prog;
+static GLuint load_prog(const char *vs_path, const char *fs_path) {
+    GLuint prog;
     int status;
     char log[1024];
     unsigned vs, fs;
@@ -328,7 +335,7 @@ static void mouse_cb(GLFWwindow *wnd, double x, double y) {
     yaw += off_x;
     pitch += off_y;
     yaw = fmodf(yaw, GLM_PIf * 2.0F);
-    pitch = CLAMP(pitch, MIN_PITCH, MAX_PITCH);
+    pitch = fclampf(pitch, MIN_PITCH, MAX_PITCH);
 }
 
 static void update_cam_dirs(void) {
@@ -348,13 +355,13 @@ static float get_air_lum(ivec3s pos) {
     return lum ? (*lum + 1) / 16.0F : 1.0F;
 }
 
-static struct vertex chunk_vertices[VERTICES_IN_CHUNK];
-static uint32_t chunk_indices[INDICES_IN_CHUNK];
-static int chunk_n_vertices;
+static ivec3s ivec3_add_to_axis(ivec3s a, int b, int i) {
+    a.raw[i] += b;
+    return a;
+}
 
 static float get_face_lum(ivec3s pos, int face) {
-    ivec3s empty = pos;
-    empty.raw[face / 2] += face_dir(face);
+    ivec3s empty = ivec3_add_to_axis(pos, face_dir(face), face / 2);
     return get_air_lum(empty) * face_lums[face]; 
 }
 
@@ -380,15 +387,15 @@ static void block_gen_vertices(struct chunk *chunk, ivec3s local_pos) {
         if (!(*face & (1 << dir))) {
             continue;
         }
-        indices = &chunk_indices[chunk->n_indices];
-        indices[0] = chunk_n_vertices;
-        indices[1] = chunk_n_vertices + 1;
-        indices[2] = chunk_n_vertices + 2;
-        indices[3] = chunk_n_vertices + 2; 
-        indices[4] = chunk_n_vertices + 3;
-        indices[5] = chunk_n_vertices;
+        indices = &chunk->indices[chunk->n_indices];
+        indices[0] = chunk->n_vertices;
+        indices[1] = chunk->n_vertices + 1;
+        indices[2] = chunk->n_vertices + 2;
+        indices[3] = chunk->n_vertices + 2; 
+        indices[4] = chunk->n_vertices + 3;
+        indices[5] = chunk->n_vertices;
         chunk->n_indices += 6; 
-        dst = &chunk_vertices[chunk_n_vertices];
+        dst = &chunk->vertices[chunk->n_vertices];
         for (corner = 0; corner < 4; corner++) {
             src = &cube_vertices[dir * 4 + corner];
             dst->xyz = vec3_add(src->xyz, block_pos); 
@@ -401,47 +408,54 @@ static void block_gen_vertices(struct chunk *chunk, ivec3s local_pos) {
             }
             dst++;
         }
-        chunk_n_vertices += 4;
+        chunk->n_vertices += 4;
     }
+}
+
+static void enable_attrib(int i, int n, size_t stride, size_t offset) {
+    glVertexAttribPointer(i, n, GL_FLOAT, 
+            GL_FALSE, stride, (void *) offset);
+    glEnableVertexAttribArray(i);
 }
 
 static void chunk_gen_vertices(struct chunk *chunk) {
-    ivec3s pos;
-
-    chunk_n_vertices = 0;
+    chunk->n_vertices = 0;
     chunk->n_indices = 0;
+    ivec3s pos;
     FOR_LOCAL_POS (pos) {
         block_gen_vertices(chunk, pos);
     }
+}
+
+static void chunk_buf_verticies(struct chunk *chunk) {
     glBindVertexArray(chunk->vao);
     glBindBuffer(GL_ARRAY_BUFFER, chunk->vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0,
-            chunk_n_vertices * sizeof(*chunk_vertices), 
-            chunk_vertices);
+            chunk->n_vertices * sizeof(*chunk->vertices), 
+            chunk->vertices);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, chunk->ebo);
     glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
-            chunk->n_indices * sizeof(*chunk_indices),
-            chunk_indices);
+            chunk->n_indices * sizeof(*chunk->indices),
+            chunk->indices);
 }
 
 static void world_gen_vertices(void) {
-    clear_dirty_all(DIRTY_VERTICES, chunk_gen_vertices); 
+    do_dirty_jobs(DIRTY_VERTICES, chunk_gen_vertices);
+    clear_dirty_all(DIRTY_VERTICES, chunk_buf_verticies); 
 }
 
 static void gen_chunk(ivec3s pos) {
-    int x, y, z;
-    float nx, ny, nz;
-    struct chunk *c;
-
-    c = chunk_pos_to_chunk(pos);
+    struct chunk *c = chunk_pos_to_chunk(pos);
     c->pos = pos;
-    for (x = 0; x < CHUNK_LEN; x++) {
-        for (y = 0; y < CHUNK_LEN; y++) {
-            for (z = 0; z < CHUNK_LEN; z++) {
-                nx = (x / (float) CHUNK_LEN + c->pos.x);
-                ny = y / (float) CHUNK_LEN + c->pos.y;
-                nz = (z / (float) CHUNK_LEN + c->pos.z);
-                if ((c->pos.y == 0 && y == 0) || noise3(nx, ny, nz) > 0) {
+    for (int x = 0; x < CHUNK_LEN; x++) {
+        for (int y = 0; y < CHUNK_LEN; y++) {
+            for (int z = 0; z < CHUNK_LEN; z++) {
+                ivec3s local_pos = {{x, y, z}};
+                ivec3s world_pos = local_to_world_pos(local_pos, pos);
+                float nx = world_pos.x / (float) CHUNK_LEN;
+                float ny = world_pos.y / (float) CHUNK_LEN;
+                float nz = world_pos.z / (float) CHUNK_LEN;
+                if (noise3(nx, ny, nz) > 0) {
                     c->blocks[x][y][z] = STONE;
                 }
             }
@@ -505,11 +519,17 @@ static void gen_items_vertices(void) {
 }
 
 static void gen_vertices(void) {
+    double t0 = glfwGetTime();
+    int n = dirties[DIRTY_LUMS].n_chunks;
     world_gen_heightmap();
     world_gen_lums();
     world_gen_faces();
     world_gen_vertices();
     gen_items_vertices();
+    double t1 = glfwGetTime();
+    if (n) {
+        printf("ms: %.3f\n", (t1 - t0) * 1000.0);
+    }
 }
 
 static int vec3_min_idx(vec3s v) {
@@ -567,40 +587,32 @@ static void find_block_itc(void) {
     }
 }
 
-static void mark_itc_dirty(void) {
-    struct chunk *chunk;
-    ivec3s pos, adj;
-    int axis; 
-    struct bounds bounds;
-
-    pos = world_to_chunk_pos(pos_itc);
-    chunk = chunk_pos_to_chunk(pos);
-    mark_dirty_all(chunk);
-    for (axis = 0; axis < 3; axis++) {
-        adj = pos;
-        adj.raw[axis]--;
-        chunk = chunk_pos_to_chunk_safe(adj);
-        if (chunk) {
-            mark_dirty(chunk, DIRTY_LUMS);
-            mark_dirty(chunk, DIRTY_FACES);
-            mark_dirty(chunk, DIRTY_VERTICES);
-        }
-        adj = pos;
-        adj.raw[axis]++;
-        chunk = chunk_pos_to_chunk_safe(adj);
-        if (chunk) {
-            mark_dirty(chunk, DIRTY_LUMS);
-            mark_dirty(chunk, DIRTY_FACES);
-            mark_dirty(chunk, DIRTY_VERTICES);
-        }
+static void mark_adj(ivec3s pos, int val, int axis) {
+    ivec3s adj = ivec3_add_to_axis(pos, val, axis);
+    struct chunk *chunk = chunk_pos_to_chunk_safe(adj);
+    if (chunk) {
+        mark_dirty(chunk, DIRTY_LUMS);
+        mark_dirty(chunk, DIRTY_FACES);
+        mark_dirty(chunk, DIRTY_VERTICES);
     }
+}
 
-    bounds.min.x = MAX(pos.x - 1, 0);
-    bounds.min.y = 0;
-    bounds.min.z = MAX(pos.z - 1, 0);
-    bounds.max.x = MIN(pos.x + 2, NX_CHUNKS);
-    bounds.max.y = NY_CHUNKS;
-    bounds.max.z = MIN(pos.z + 2, NZ_CHUNKS);
+static void mark_itc_dirty(void) {
+    ivec3s pos = world_to_chunk_pos(pos_itc);
+    struct chunk *chunk = chunk_pos_to_chunk(pos);
+    mark_dirty_all(chunk);
+    for (int axis = 0; axis < 3; axis++) {
+        mark_adj(pos, -1, axis);
+        mark_adj(pos, 1, axis); 
+    }
+    struct bounds bounds = {
+        .min.x = imax(pos.x - 1, 0),
+        .min.y = 0,
+        .min.z = imax(pos.z - 1, 0),
+        .max.x = imin(pos.x + 2, NX_CHUNKS),
+        .max.y = NY_CHUNKS,
+        .max.z = imin(pos.z + 2, NZ_CHUNKS)
+    };
     FOR_BOUNDS (pos, bounds) {
         chunk = chunk_pos_to_chunk(pos);
         mark_dirty(chunk, DIRTY_LUMS);
@@ -766,12 +778,6 @@ static void add_block(void) {
     }
 }
 
-static void enable_attrib(int i, int n, size_t stride, size_t offset) {
-    glVertexAttribPointer(i, n, GL_FLOAT, 
-            GL_FALSE, stride, (void *) offset);
-    glEnableVertexAttribArray(i);
-}
-
 static void move_player(void) {
     vec2s horz = {};
     if (glfwGetKey(wnd, GLFW_KEY_W)) {
@@ -838,22 +844,46 @@ static void update_block_itc(void) {
     }
 }
 
-static int chunk_in_view(ivec3s chunk_pos) {
-    ivec3s world_pos = chunk_to_world_pos(chunk_pos);
-    vec3s fworld_pos = ivec3s_to_vec3s(world_pos);
-    vec3s far_pos = vec3_muladds(front, CHUNK_LEN * 2.75F, fworld_pos);
-    vec3s cam_pos = vec3_sub(far_pos, eye);
-    vec3s cam_norm = vec3_normalize(cam_pos);
-    float cam_cos = vec3_dot(cam_norm, front);
-    return cam_cos >= 0.7F;
+static int object_visible(vec3s *vs, int n, mat4s *mvp) {
+    vec3s min = {{INFINITY, INFINITY, INFINITY}};
+    vec3s max = {{-INFINITY, -INFINITY, -INFINITY}};
+    for (int i = 0; i < n; i++) {
+        vec4s world = glms_vec4(vs[i], 1.0F);
+        vec4s clip = mat4_mulv(*mvp, world); 
+        vec4s ndc = vec4_divs(clip, clip.w);
+        min.x = fminf(min.x, ndc.x); 
+        min.y = fminf(min.y, ndc.y); 
+        min.z = fminf(min.z, ndc.z); 
+        max.x = fmaxf(max.x, ndc.x); 
+        max.y = fmaxf(max.y, ndc.y); 
+        max.z = fmaxf(max.z, ndc.z); 
+    }
+    return min.x <= 1.0F && max.x >= -1.0F &&
+           min.y <= 1.0F && max.y >= -1.0F &&
+           min.z <= 1.0F && max.z >= -1.0F; 
 }
 
-static void draw_map(void) {
+static int chunk_visible(ivec3s *chunk_pos, mat4s *mvp) {
+    ivec3s pos = chunk_to_world_pos(*chunk_pos);
+    vec3s vertices[8] = {
+        {{pos.x, pos.y, pos.z}},
+        {{pos.x, pos.y, pos.z + CHUNK_LEN}},
+        {{pos.x, pos.y + CHUNK_LEN, pos.z}},
+        {{pos.x, pos.y + CHUNK_LEN, pos.z + CHUNK_LEN}},
+        {{pos.x + CHUNK_LEN, pos.y, pos.z}},
+        {{pos.x + CHUNK_LEN, pos.y, pos.z + CHUNK_LEN}},
+        {{pos.x + CHUNK_LEN, pos.y + CHUNK_LEN, pos.z}},
+        {{pos.x + CHUNK_LEN, pos.y + CHUNK_LEN, pos.z + CHUNK_LEN}}
+    };
+    return object_visible(vertices, 8, mvp);
+}
+
+static void draw_map(mat4s *mvp) {
     ivec3s pos;
     struct chunk *chunk;
 
     FOR_CHUNK (pos, chunk) {
-        if (chunk_in_view(pos)) {
+        if (chunk_visible(&pos, mvp)) {
             glBindVertexArray(chunk->vao);
             glDrawElements(GL_TRIANGLES, 
                            chunk->n_indices, 
@@ -899,11 +929,71 @@ static void update_items(void) {
     }
 }
 
+#if 0
+static GLuint gen_png_texture(void) {
+    static const char *paths[8] = {
+        "dirt.png",
+        "grass.png",
+        "grass-dirt.png",
+        "hotbar.png",
+        "zero.png",
+        "four.png",
+        "eight.png",
+        "stone.png",
+    };
+    int img_sz = 16 * 16 * 4;
+    void *texels = malloc(8 * img_sz);
+    char *dst = texels;
+    for (int i = 0; i < 8; i++) {
+        char *path = xasprintf("img/%s", paths[i]);
+        int w, h, c;
+        void *src = stbi_load(path, &w, &h, &c, 4);
+        if (!src) {
+            die("stbi_load(%s): %s\n", src, stbi_failure_reason());
+        }
+        if (w != 16 || h != 16) {
+            die("invalid dimensions (%s)\n", path);
+        }
+        free(path);
+        memcpy(dst, src, img_sz);
+        dst += img_sz;
+    }
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 16, 16, 8);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 
+                    16, 16, 8, GL_RGBA, GL_UNSIGNED_BYTE, texels); 
+    free(texels);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return tex;
+}
+#endif
+
+static GLuint gen_atlas(void) {
+    int w, h, c;
+    stbi_uc *data = stbi_load("img/atlas.png", &w, &h, &c, 4);
+    if (!data) {
+        die("stbi_load: %s\n", stbi_failure_reason());
+    }
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
+            GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 
+            0, GL_RGBA, GL_UNSIGNED_BYTE, data); 
+    glGenerateMipmap(GL_TEXTURE_2D);
+    stbi_image_free(data);
+    return tex;
+}
+
 int main(void) {
     mat4s proj, view, world;
-    stbi_uc *data;
-    unsigned tex;
-    int w, h, channels;
     vec3s center;
     vec3s aspect;
 
@@ -922,22 +1012,9 @@ int main(void) {
     if (!gladLoadGL((GLADloadfunc) glfwGetProcAddress)) {
         glfw_die("glfwGetProcAddress");
     }
-    glfwSwapInterval(0);
+    glfwSwapInterval(1);
     set_data_path();
-    data = stbi_load("img/atlas.png", &w, &h, &channels, 4);
-    if (!data) {
-        die("stbi_load: %s\n", stbi_failure_reason());
-    }
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 
-            GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 
-            0, GL_RGBA, GL_UNSIGNED_BYTE, data); 
-    glGenerateMipmap(GL_TEXTURE_2D);
-    stbi_image_free(data);
-    data = NULL;
+    GLuint tex = gen_atlas();
     glGenVertexArrays(NUM_VAOS, vaos);
     glGenBuffers(NUM_BOS, bos);
     glBindVertexArray(vaos[VAO_MAP]);
@@ -946,11 +1023,10 @@ int main(void) {
             NULL, GL_DYNAMIC_DRAW);
     ENABLE_ATTRIB(0, 3, struct vertex, xyz); 
     ENABLE_ATTRIB(1, 2, struct vertex, uv); 
-    ENABLE_ATTRIB(2, 1, struct vertex, lum); 
+    ENABLE_ATTRIB(2, 1, struct vertex, lum);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[EBO_MAP]);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), 
             NULL, GL_DYNAMIC_DRAW);
-    glBindVertexArray(0);
     glBindVertexArray(vaos[VAO_CROSSHAIR]);
     glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_CROSSHAIR]);
     glBufferData(GL_ARRAY_BUFFER, sizeof(crosshair_vertices), 
@@ -959,45 +1035,46 @@ int main(void) {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bos[EBO_CROSSHAIR]);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(crosshair_indices),
             crosshair_indices, GL_STATIC_DRAW);
-    block_prog = load_prog("map.vert", "map.frag");
-    crosshair_prog = load_prog("crosshair.vert", "crosshair.frag");
-    world_loc = glGetUniformLocation(block_prog, "world");
-    tex_loc = glGetUniformLocation(block_prog, "tex");
-    proj_loc = glGetUniformLocation(crosshair_prog, "proj");
+    GLuint block_prog = load_prog("block.vert", "block.frag");
+    GLuint prism_prog = load_prog("prism.vert", "prism.frag");
+    GLuint crosshair_prog = load_prog("crosshair.vert", "crosshair.frag");
+    GLint proj_loc = glGetUniformLocation(crosshair_prog, "proj");
+    GLint prism_world_loc = glGetUniformLocation(prism_prog, "world");
+    GLint block_world_loc = glGetUniformLocation(block_prog, "world");
     glfwSetFramebufferSizeCallback(wnd, resize_cb);
     glfwSetInputMode(wnd, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(wnd, mouse_cb);
     glfwShowWindow(wnd);
-    glUseProgram(block_prog);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glUniform1i(tex_loc, 0);
     held_left = 0;
     held_right = 0;
     gen_map();
     gen_chunk_buffers();
+    jobq_new();
     while (!glfwWindowShouldClose(wnd)) {
         glfwPollEvents();
         update_dt();
-        dprintf(0, "FPS: %f\r", 1.0F / dt);
         update_cam_dirs();
         move_player();
         update_hotbar_sel();
         update_eye();
         update_block_itc();
         update_items();
-        gen_vertices();
+
         glClearColor(0.5F, 0.6F, 1.0F, 1.0F);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
         proj = glms_perspective_default(width / (float) height);
         center = vec3_add(eye, front);
         view = glms_lookat(eye, center, up);
         world = mat4_mul(proj, view);
+        gen_vertices();
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
         glUseProgram(block_prog);
-        glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) &world);
-        draw_map();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glUniformMatrix4fv(block_world_loc, 1, GL_FALSE, (float *) &world);
+        draw_map(&world);
         glBindVertexArray(vaos[VAO_MAP]);
         glBindBuffer(GL_ARRAY_BUFFER, bos[VBO_MAP]);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
@@ -1008,17 +1085,16 @@ int main(void) {
                 n_indices * sizeof(*indices),
                 indices);
         glDrawElements(GL_TRIANGLES, n_indices, GL_UNSIGNED_INT, NULL);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
         aspect.x = (float) height / width;
         aspect.y = 1.0F;
         aspect.z = 1.0F;
         aspect = vec3_divs(aspect, 8.0F);
         world = glms_scale_make(aspect);
         gen_hotbar_vertices();
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glUniformMatrix4fv(world_loc, 1, GL_FALSE, (float *) &world);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glUseProgram(prism_prog);
+        glUniformMatrix4fv(prism_world_loc, 1, GL_FALSE, (float *) &world);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
                 n_vertices * sizeof(*vertices), 
                 vertices);

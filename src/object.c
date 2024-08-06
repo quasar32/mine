@@ -89,7 +89,7 @@ void update_dt(void) {
     float t1;
 
     t1 = glfwGetTime();
-    dt = CLAMP(t1 - t0, 0.0F, 1.0F);
+    dt = fclampf(t1 - t0, 0.0F, 1.0F);
     t0 = t1;
 }
 

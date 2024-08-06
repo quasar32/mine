@@ -11,3 +11,10 @@ void die(const char *fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
+void *xmalloc(size_t sz) {
+    void *ptr = malloc(sz);
+    if (!ptr) {
+        die("oom\n");
+    }
+    return ptr;
+}

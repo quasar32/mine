@@ -1,11 +1,36 @@
-INC =-Ilib/glad/include -Ilib/stb/ -Ilib/glfw/include 
-INC += -Ilib/cglm/include -Ilib/perlin-noise/src
+INC := -isystem lib/glad/include \
+       -isystem lib/stb/ \
+       -isystem lib/glfw/include \
+       -isystem lib/cglm/include \
+       -isystem lib/perlin-noise/src
 
-OBJ = lib/glad/src/gl.o lib/stb/stb_image.o lib/glfw/src/libglfw3.a
-OBJ += lib/perlin-noise/src/noise1234.o
+LIB := lib/glad/src/gl.o \
+       lib/stb/stb_image.o \
+       lib/glfw/src/libglfw3.a \
+       lib/perlin-noise/src/noise1234.o
 
-mine: src/*.c src/*.h $(OBJ)
-	gcc $(INC) $^ -lm -o $@ -Wall -O3 -s
+NODEP := clean clean-lib clean-all 
+
+.PHONY: $(NODEP)
+
+SRC := $(wildcard src/*.c)
+OBJ := $(SRC:.c=.o)
+DEP := $(SRC:.c=.d)
+
+mine: $(OBJ) $(LIB) 
+	gcc src/*.o $(LIB) -lm -o $@
+
+ifeq ($(words $(findstring $(MAKECMDGOALS), $(NODEP))), 0)
+-include $(DEP)
+endif
+
+src/%.d: src/%.c
+	gcc $< $(INC) -MM -MT $(@:.d=.o) -o $@ 
+
+src/%.o: src/%.c src/%.d
+	gcc $< -o $@ $(INC) -O3 -c -Wall
+
+-include $(DEP)
 
 lib/glad/src/gl.o:
 	gcc $(@:.o=.c) -o $@ -Ilib/glad/include -c -O2
@@ -23,5 +48,10 @@ lib/perlin-noise/src/noise1234.o:
 	gcc $(@:.o=.c) -o $@ -c -O2
 
 clean:
-	make -C lib/glfw clean 
-	rm $(OBJ) lib/glfw/Makefile mine -f 
+	rm $(OBJ) $(DEP) -f
+
+clean-lib:
+	make -C lib/glfw clean || true 
+	rm $(LIB) lib/glfw/Makefile mine -f 
+
+clean-all: clean clean-lib

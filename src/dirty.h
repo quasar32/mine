@@ -2,6 +2,8 @@
 
 #include "map.h"
 
+typedef void clean(struct chunk *);
+
 enum dirty_type {
     DIRTY_HEIGHTMAP,
     DIRTY_LUMS,
@@ -20,4 +22,5 @@ extern struct dirty dirties[N_DIRITES];
 void mark_dirty(struct chunk *chunk, int type);
 void mark_dirty_all(struct chunk *chunk);
 void clear_dirty(struct chunk *chunk, int type);
-void clear_dirty_all(int type, void(*clear)(struct chunk *));
+void clear_dirty_all(int type, clean *clear);
+void do_dirty_jobs(int type, clean *fn);

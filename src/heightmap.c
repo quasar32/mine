@@ -49,7 +49,8 @@ void world_gen_heightmap(void) {
         uint8_t *slot = &grid[pos.x][pos.z];
         if (!*slot) {
             *slot = 1;
-            column_gen_heightmap((ivec2s) {.x = pos.x, .y = pos.z});
+            ivec2s xz = {{pos.x, pos.z}};
+            column_gen_heightmap(xz);
         }
     }
     dirty->n_chunks = 0;
