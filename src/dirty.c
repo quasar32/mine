@@ -36,9 +36,14 @@ void clear_dirty_all(int type, clean *clear) {
 
 void do_dirty_jobs(int type, clean *fn) {
     struct dirty *dirty = &dirties[type];
+#if 0
     for (int i = 0; i < dirty->n_chunks; i++) {
         jobq_add((task *) fn, dirty->chunks[i]);
     }
     jobq_wait();
+#endif
+    for (int i = 0; i < dirty->n_chunks; i++) {
+        fn(dirty->chunks[i]);
+    }
 }
 

@@ -1,6 +1,7 @@
 #include "face.h"
 #include "map.h"
 #include "dirty.h"
+#include "misc.h"
 
 #define LEFT     1U
 #define RIGHT    2U
@@ -10,48 +11,37 @@
 #define FRONT   32U
 
 static void chunk_gen_faces(struct chunk *chunk) {
-    ivec3s old, new;
-    ivec3s neg_chunk_pos;
-    int axis;
-    uint8_t *face, *neg_face;
-    struct chunk *neg_chunk;
-    int block;
-
-    FOR_LOCAL_POS (old) {
-        block = *get_local_block(chunk, old);
-        if (!block) {
-            continue;
-        } 
-        face = get_local_face(chunk, old);
-        *face = FRONT | RIGHT | TOP; 
-        for (axis = 0; axis < 3; axis++) {
-            new = old;
-            new.raw[axis]--;
-            if (new.raw[axis] < 0) {
-                neg_chunk_pos = chunk->pos;
-                neg_chunk_pos.raw[axis]--;
-                if (neg_chunk_pos.raw[axis] < 0) {
-                    block = 0;
-                } else { 
-                    neg_chunk = chunk_pos_to_chunk(neg_chunk_pos);
-                    new.raw[axis] += CHUNK_LEN;
-                    block = *get_local_block(neg_chunk, new);
-                    neg_face = get_local_face(neg_chunk, new);
+    for (int x = 0; x < CHUNK_LEN; x++) {
+        for (int y = 0; y < CHUNK_LEN; y++) {
+            for (int z = 0; z < CHUNK_LEN; z++) {
+                if (!chunk->blocks[x][y][z]) {
+                    continue;
                 }
-            } else {
-                block = *get_local_block(chunk, new);
-                neg_face = get_local_face(chunk, new); 
-            } 
-            if (block) {
-                *neg_face &= ~(1 << (axis * 2 + 1)); 
-            } else {
-                *face |= 1 << (axis * 2);
+                chunk->faces[x][y][z] = RIGHT | FRONT | TOP;
+                if (x == 0 || !chunk->blocks[x - 1][y][z]) {
+                   chunk->faces[x][y][z] |= LEFT; 
+                } else {
+                   chunk->faces[x - 1][y][z] &= ~RIGHT; 
+                }
+                if (y == 0 || !chunk->blocks[x][y - 1][z]) {
+                   chunk->faces[x][y][z] |= BOTTOM; 
+                } else {
+                   chunk->faces[x][y - 1][z] &= ~TOP; 
+                }
+                if (z == 0 || !chunk->blocks[x][y][z - 1]) {
+                   chunk->faces[x][y][z] |= BACK; 
+                } else {
+                   chunk->faces[x][y][z - 1] &= ~FRONT; 
+                }
             }
         }
-    } 
+    }
 }
 
+static void stub(struct chunk *) {};
+
 void world_gen_faces(void) {
-    clear_dirty_all(DIRTY_FACES, chunk_gen_faces); 
+    do_dirty_jobs(DIRTY_FACES, chunk_gen_faces); 
+    clear_dirty_all(DIRTY_FACES, stub); 
 }
 

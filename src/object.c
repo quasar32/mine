@@ -10,7 +10,7 @@ static double t0;
 
 struct object player = {
     .type = OBJ_PLAYER,
-    .pos = {.x = 8.0F, .y = 64.0F, .z = 8.0F}
+    .pos = {.x = 8.0F, .y = NY_BLOCKS, .z = 8.0F}
 };
 
 struct prism locals[] = {

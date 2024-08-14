@@ -4,7 +4,7 @@
 #include <sys/sysinfo.h>
 #include <stdlib.h>
 
-#define MAX_JOBS 256
+#define MAX_JOBS 1024
 
 #define FATAL(fn, ...) \
     do { \
@@ -65,7 +65,7 @@ void jobq_new(void) {
     FATAL(cnd_init, &work_cnd);
     FATAL(cnd_init, &done_cnd);
     FATAL(mtx_init, &work_mtx, mtx_plain);
-    n_thrds = get_nprocs(); 
+    n_thrds = get_nprocs() / 2; 
     thrds = malloc(n_thrds * sizeof(*thrds));
     for (int i = 0; i < n_thrds; i++) {
         FATAL(thrd_create, &thrds[i], jobq_do, NULL);

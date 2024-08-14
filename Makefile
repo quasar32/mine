@@ -28,7 +28,7 @@ src/%.d: src/%.c
 	gcc $< $(INC) -MM -MT $(@:.d=.o) -o $@ 
 
 src/%.o: src/%.c src/%.d
-	gcc $< -o $@ $(INC) -O3 -c -Wall
+	gcc $< -o $@ $(INC) -O3 -c -Wall -DNDEBUG
 
 -include $(DEP)
 
