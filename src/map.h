@@ -9,9 +9,9 @@
 
 #define CHUNK_LEN 16 
 
-#define NX_CHUNKS 16
-#define NY_CHUNKS 16
-#define NZ_CHUNKS 1
+#define NX_CHUNKS 8
+#define NY_CHUNKS 8
+#define NZ_CHUNKS 8
 
 #define NX_BLOCKS (NX_CHUNKS * CHUNK_LEN)
 #define NY_BLOCKS (NY_CHUNKS * CHUNK_LEN)

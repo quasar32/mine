@@ -1,7 +1,6 @@
 #include "light.h"
 #include "map.h"
 #include "misc.h"
-#include "heightmap.h"
 #include "dirty.h"
 
 #include <string.h>
@@ -113,7 +112,9 @@ static void spread_light(struct chunk *chunk, struct light *old) {
         new = *old;
         axis = dir / 2;
         new.pos.raw[axis] += face_dir(dir);
-        new.lum--;
+        if (dir != 2 || new.lum != 15) {
+            new.lum--;
+        }
         if (local_pos_in_chunk(new.pos)) {
             block = get_local_block(chunk, new.pos); 
             lum = get_local_lum(chunk, new.pos); 
@@ -136,27 +137,21 @@ static void spread_light(struct chunk *chunk, struct light *old) {
     }
 }
 
-void flood_direct_sunlight(struct chunk *chunk) {
-    struct heightmap *heightmap = chunk_to_heightmap(chunk);
-    int chunk_bot = chunk->pos.y * CHUNK_LEN;
-    int chunk_top = chunk_bot + CHUNK_LEN; 
+static void enqueue_sunlight(struct chunk *chunk) {
+    if (chunk->pos.y < NY_CHUNKS - 1) {
+        return;
+    }
     for (int x = 0; x < CHUNK_LEN; x++) {
         for (int z = 0; z < CHUNK_LEN; z++) {
-            int y0 = heightmap->heights[x][z];
-            if (y0 < chunk_bot) {
-                y0 = 0;
-            } else if (y0 >= chunk_top) {
-                y0 = CHUNK_LEN;
-            } else {
-                y0 -= chunk_bot;
-            }
-            int y = 0;
-            for (; y < y0; y++) {
-                chunk->lums[x][y][z] = 0;
-            }
-            for (; y < CHUNK_LEN; y++) {
-                chunk->lums[x][y][z] = 15;
-            }
+            struct light l = {
+                .pos = {
+                    .x = x,
+                    .y = CHUNK_LEN,
+                    .z = z,
+                },
+                .lum = 15,
+            };
+            enqueue_light(chunk, &l);
         }
     }
 }
@@ -165,32 +160,15 @@ static void set_all_outflow(struct chunk *chunk) {
     chunk->old_outflow = 63;
 }
 
-static void enqueue_indirect_sunlight(struct chunk *chunk) {
-    struct heightmap *hm = &heightmaps[chunk->pos.x][chunk->pos.z];
-    int chunk_min_y = chunk->pos.y * CHUNK_LEN;
-    for (int x = 0; x < CHUNK_LEN; x++) {
-        for (int z = 0; z < CHUNK_LEN; z++) {
-            int y = imax(hm->heights[x][z] - chunk_min_y, 0);
-            for (; y < CHUNK_LEN; y++) {
-                struct light light = {
-                    .pos = {{x, y, z}},
-                    .lum = 15
-                };
-                enqueue_light(chunk, &light);
-            }
-        }
-    }
-}
-
 static void clear_outflow(struct chunk *chunk) {
+    memset(chunk->lums, 0, sizeof(chunk->lums));
     memset(chunk->outflow, 0, sizeof(chunk->outflow));
     chunk->old_outflow = 0;
     chunk->new_outflow = 0;
 }
 
 static void setup_lights(struct chunk *chunk) {
-    flood_direct_sunlight(chunk);
-    enqueue_indirect_sunlight(chunk);
+    enqueue_sunlight(chunk);
     clear_outflow(chunk);
 }
 

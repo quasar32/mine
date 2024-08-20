@@ -5,7 +5,6 @@
 typedef void clean(struct chunk *);
 
 enum dirty_type {
-    DIRTY_HEIGHTMAP,
     DIRTY_LUMS,
     DIRTY_FACES,
     DIRTY_VERTICES,

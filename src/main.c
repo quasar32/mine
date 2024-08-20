@@ -487,10 +487,19 @@ static void gen_heightmap(int cx, int cz) {
 static void gen_chunk(ivec3s pos) {
     struct chunk *c = chunk_pos_to_chunk(pos);
     c->pos = pos;
-    for (int x = 0; x < CHUNK_LEN; x++) {
-        for (int z = 0; z < CHUNK_LEN; z++) {
-            for (int y = 0; y < c->heightmap[x][z]; y++) {
-                c->blocks[x][y][z] = STONE; 
+    for (int lx = 0; lx < CHUNK_LEN; lx++) {
+        for (int lz = 0; lz < CHUNK_LEN; lz++) {
+            for (int ly = 0; ly < c->heightmap[lx][lz]; ly++) {
+                int wx = c->pos.x * CHUNK_LEN + lx; 
+                int wy = c->pos.y * CHUNK_LEN + ly;
+                int wz = c->pos.z * CHUNK_LEN + lz; 
+                float nx = wx / (float) CHUNK_LEN;
+                float ny = wy / (float) CHUNK_LEN;
+                float nz = wz / (float) CHUNK_LEN;
+                float nv = noise3(nx, ny, nz);
+                if (nv > 0.0F) {
+                    c->blocks[lx][ly][lz] = STONE; 
+                }
             }
         }
     }
@@ -556,14 +565,16 @@ static void gen_items_vertices(void) {
 }
 
 static void gen_vertices(void) {
+    int n = dirties[DIRTY_FACES].n_chunks;
     double t0 = glfwGetTime();
-    world_gen_heightmap();
     world_gen_lums();
     world_gen_faces();
     world_gen_vertices();
     gen_items_vertices();
     double t1 = glfwGetTime();
-    printf("%f\n", t1 - t0);
+    if (n) {
+        printf("%f\n", t1 - t0);
+    }
 }
 
 static int vec3_min_idx(vec3s v) {
